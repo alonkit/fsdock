@@ -346,7 +346,7 @@ def get_binding_pockets2(protein_graph, ligand_graph: List[Data], lig_rec_edges:
 
 def hide_sidechains(graph:HeteroData, show_idx=0):
     # lig lig
-    sidechain_mask = graph.sidechains_mask <= show_idx
+    sidechain_mask = torch.tensor(graph.sidechains_mask <= show_idx)
     core_indices = torch.where(sidechain_mask)[0]
     
     graph = graph
@@ -371,7 +371,7 @@ def hide_sidechains(graph:HeteroData, show_idx=0):
     graph['ligand','receptor'].edge_index = lig_rec
     return graph
 
-def get_lig_graph(mol, complex_graph):
+def get_lig_graph(mol, complex_graph, lig_max_radius=None):
     atom_feats = lig_atom_featurizer(mol)
 
     row, col, edge_type = [], [], []
@@ -385,14 +385,22 @@ def get_lig_graph(mol, complex_graph):
     edge_type = torch.tensor(edge_type, dtype=torch.long)
     edge_attr = F.one_hot(edge_type, num_classes=len(bonds)).to(torch.float)
 
-    complex_graph['ligand'].x = atom_feats
-    complex_graph['ligand', 'lig_bond', 'ligand'].edge_index = edge_index
-    complex_graph['ligand', 'lig_bond', 'ligand'].edge_attr = edge_attr
+
+
+
 
     if mol.GetNumConformers() > 0:
         lig_coords = torch.from_numpy(mol.GetConformer().GetPositions()).float()
         complex_graph['ligand'].pos = lig_coords
+    
+    # radius_edges = radius_graph(lig_coords, lig_max_radius)
 
+
+    complex_graph['ligand'].x = atom_feats
+    complex_graph['ligand', 'lig_bond', 'ligand'].edge_index = edge_index
+    # complex_graph['ligand', 'lig_bond', 'ligand'].radius_edge_index = radius_edges
+    complex_graph['ligand', 'lig_bond', 'ligand'].edge_attr = edge_attr
+    
     return
 
 

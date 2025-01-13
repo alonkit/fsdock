@@ -2,6 +2,7 @@ import scipy.spatial # very important, does not work without it, i don't know wh
 from tokenizers import Tokenizer
 from torch_geometric.transforms import ToUndirected
 from torch_geometric.data import collate
+from datasets.fsmol_dock_grouped import GFsDockDataset
 from datasets.untasked_fsmol_dock import UntaskedFsDockDataset
 from models.cfom_dock import CfomDock
 from models.graph_embedder import GraphEmbedder
@@ -14,7 +15,7 @@ from torch_geometric.loader import DataLoader
 from models.transformer import TransformerDecoder, TransformerEncoder
 
 tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-ds = UntaskedFsDockDataset("data/fsdock/smol", "data/tasks_smol.csv",tokenizer=tokenizer, hide_sidechains=True)
+ds = GFsDockDataset("data/fsdock/smol", "data/tasks_smol.csv",tokenizer=tokenizer, hide_sidechains=True)
 dl = DataLoader(ds, batch_size=4, shuffle=True)
 graph_embedder = GraphEmbedder(
     distance_embed_dim=16,
