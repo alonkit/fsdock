@@ -21,6 +21,15 @@
             "program": "train.py",
             "console": "integratedTerminal",
             "justMyCode": false
+        },
+
+        {
+            "name": "debug dataset",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "run_dataset.py",
+            "console": "integratedTerminal",
+            "justMyCode": false
         }
     ]
 }

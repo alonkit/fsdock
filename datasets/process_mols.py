@@ -1,5 +1,5 @@
 import copy
-from typing import List
+from typing import List, Optional
 import warnings
 import numpy as np
 import torch
@@ -13,7 +13,7 @@ from torch_cluster import knn_graph
 import prody as pr
 from torch_geometric.data import Data, HeteroData
 
-
+import time
 import torch.nn.functional as F
 from datasets.features import allowable_features, bonds
 from datasets.constants import aa_short2long, atom_order, three_to_one
@@ -278,6 +278,72 @@ def get_binding_pockets(protein_graph, ligand_graphs: List[Data], lig_rec_cutoff
         lig_receptor_batch = lig_receptor_batch[:,lig_receptor_batch[0] >= 0] # batch edges
         lig_atom_batch = lig_atom_batch[:,lig_atom_batch[0] >= 0] # batch edges
 
+def local_isin(elements, test_elements, both_relevant=False):
+    res = torch.zeros_like(elements).bool()
+    test_min, test_max = test_elements[0], test_elements[-1] # sorted
+    arb_elements_mask = (test_min <= elements) & (elements <= test_max)
+    if both_relevant:
+        arb_elements_mask = torch.all(arb_elements_mask,dim=0)
+        res[:,arb_elements_mask] = torch.isin(elements[:,arb_elements_mask],test_elements)
+        return torch.all(res,dim=0)
+    res[arb_elements_mask] = torch.isin(elements[arb_elements_mask],test_elements)
+    return res
+    
+def get_sub_edges(edges, sub_nodes_0=None, sub_nodes_1=None):
+    if sub_nodes_1 is None:
+        edges = edges[:,local_isin(edges,sub_nodes_0, both_relevant=True)]
+    else:
+        edges = edges[:,local_isin(edges[0], sub_nodes_0) & local_isin(edges[1], sub_nodes_1)]
+    return edges
+    
+
+def get_binding_pockets2(protein_graph, ligand_graph: List[Data], lig_rec_edges: List[torch.Tensor], lig_atom_edges: Optional[List[torch.Tensor]]):
+    '''
+    adds the binding pocket of the protein to the ligand graphs based on distance.
+    computes multiple ligands at once for performance 
+    '''
+    do_atoms = (lig_atom_edges is not None)
+    
+    times = []    
+    #receptor receptor & lig receptor
+    curr_rec = torch.unique(lig_rec_edges[1])
+    rec_nodes_x = protein_graph['receptor'].x[curr_rec]
+    rec_nodes_pos = protein_graph['receptor'].pos[curr_rec]
+    rec_rec = protein_graph['receptor','receptor'].edge_index
+    rec_rec = get_sub_edges(rec_rec, curr_rec)
+    rec_rec = torch.searchsorted(curr_rec,rec_rec)
+    lig_rec_edges[1] = torch.searchsorted(curr_rec,lig_rec_edges[1])
+
+    ligand_graph['receptor'].x = rec_nodes_x
+    ligand_graph['receptor'].pos = rec_nodes_pos
+    ligand_graph['receptor','receptor'].edge_index = rec_rec
+    ligand_graph['ligand','receptor'].edge_index = lig_rec_edges
+    
+    #atom atom & lig atom
+    if do_atoms:
+        curr_atom = torch.unique(lig_atom_edges[1])
+        atom_nodes_x = protein_graph['atom'].x[curr_atom]
+        atom_nodes_pos = protein_graph['atom'].pos[curr_atom]
+        atom_atom = protein_graph['atom','atom'].edge_index
+        atom_atom = get_sub_edges(atom_atom, curr_atom)
+        atom_atom = torch.searchsorted(curr_atom,atom_atom)
+        lig_atom_edges[1] = torch.searchsorted(curr_atom,lig_atom_edges[1])
+        
+        ligand_graph['atom'].x = atom_nodes_x
+        ligand_graph['atom'].pos = atom_nodes_pos
+        ligand_graph['atom','atom'].edge_index = atom_atom
+        ligand_graph['ligand','atom'].edge_index = lig_atom_edges
+        
+        #atom receptor
+        atom_receptor = protein_graph['atom','receptor'].edge_index
+        atom_receptor = get_sub_edges(atom_receptor, curr_atom, curr_rec)
+        atom_receptor[0] = torch.searchsorted(curr_atom,atom_receptor[0])
+        atom_receptor[1] = torch.searchsorted(curr_rec,atom_receptor[1])
+    
+        ligand_graph['atom','receptor'].edge_index = atom_receptor
+        
+    
+
 def hide_sidechains(graph:HeteroData, show_idx=0):
     # lig lig
     sidechain_mask = graph.sidechains_mask <= show_idx
@@ -334,8 +400,8 @@ def read_molecule(molecule_file, sanitize=False, calc_charges=False, remove_hs=F
     if molecule_file.endswith('.mol2'):
         mol = Chem.MolFromMol2File(molecule_file, sanitize=False, removeHs=False)
     elif molecule_file.endswith('.sdf'):
-        supplier = Chem.SDMolSupplier(molecule_file, sanitize=False, removeHs=False)
-        mol = supplier[0]
+        with Chem.SDMolSupplier(molecule_file, sanitize=False, removeHs=False) as supplier:
+            mol = supplier[0]
     elif molecule_file.endswith('.pdbqt'):
         with open(molecule_file) as file:
             pdbqt_data = file.readlines()

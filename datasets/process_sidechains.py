@@ -1,4 +1,4 @@
-import torch
+import numpy as np
 import random
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -76,7 +76,7 @@ def get_core_and_chains(m1):
 
 def get_mask_of_sidechains(full_mol,sidechains):
     frags = Chem.GetMolFrags(sidechains, asMols=True)
-    mask = torch.zeros(full_mol.GetNumAtoms())
+    mask = np.zeros(full_mol.GetNumAtoms())
     for i, frag in enumerate(frags):
         frag_indices = [a.GetIntProp("__origIdx") for a in frag.GetAtoms() if a.HasProp("__origIdx")]
         mask[frag_indices] = i + 1            
@@ -136,7 +136,7 @@ def get_mask_of_sub_mol_old(full_mol,*,sub_mols=None,sub_mol=None ):
         frags = Chem.GetMolFrags(sub_mols, asMols=True)
     if sub_mol is not None:
         frags = [sub_mol]
-    mask = torch.zeros(full_mol.GetNumAtoms())
+    mask = np.zeros(full_mol.GetNumAtoms())
     for i, frag in enumerate(frags):
         frag_indices= full_mol.GetSubstructMatch(frag)
         mask[frag_indices] = i + 1            
