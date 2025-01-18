@@ -73,13 +73,13 @@ class PGHTConv(MessagePassing):
         super().__init__(aggr='add', node_dim=0, **kwargs)
 
         assert out_channels % num_attn_groups == 0 , 'out_channels must be divisible by num_attn_groups'
-        
+
         if not isinstance(in_channels, dict):
             in_channels = {node_type: in_channels for node_type in metadata[0]}
 
         if not isinstance(edge_in_channels, dict):
             edge_in_channels = {edge_type: edge_in_channels for edge_type in metadata[1]}
-        
+
         self.in_channels = in_channels
         self.edge_in_channels = edge_in_channels
         self.out_channels = out_channels
@@ -108,10 +108,10 @@ class PGHTConv(MessagePassing):
         for edge_type, in_channels in self.edge_in_channels.items():
             edge_type = '__'.join(edge_type)
             self.edge_lin[edge_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(), nn.Linear(out_channels, out_channels))
-        
+
         self.coords_bias_nn = nn.Sequential(nn.Linear(3, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(), nn.Linear(out_channels, out_channels))
         self.coords_mul_nn = nn.Sequential(nn.Linear(3, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(),nn.Linear(out_channels, out_channels))
-            
+
         self.attn_nn = ModuleDict()
         self.norm_messages = ModuleDict()
         for edge_type, in_channels in self.edge_in_channels.items():
@@ -121,7 +121,7 @@ class PGHTConv(MessagePassing):
         self.reset_parameters()
         self.attn_drop = nn.Dropout(dropout)
 
-# nn.Sequential(nn.Linear(cross_distance_embed_dim, emb_dim), nn.ReLU(), nn.Dropout(dropout),nn.Linear(emb_dim, emb_dim))
+    # nn.Sequential(nn.Linear(cross_distance_embed_dim, emb_dim), nn.ReLU(), nn.Dropout(dropout),nn.Linear(emb_dim, emb_dim))
     def reset_parameters(self):
         reset(self.k_lin)
         reset(self.q_lin)
@@ -158,7 +158,6 @@ class PGHTConv(MessagePassing):
             be set to :obj:`None`.
         """
 
-
         k_dict, q_dict, v_dict, out_dict = {}, {}, {}, {}
 
         # Iterate over node-types:
@@ -177,18 +176,26 @@ class PGHTConv(MessagePassing):
             if src_type not in self.in_channels or dst_type not in self.in_channels:
                 continue
             s_edge_type = '__'.join(edge_type)
-            
+
             e = edge_attr_dict[edge_type]
             if self.edge_lin is not None:
                 e = self.edge_lin[s_edge_type](e)
-                
+
             k = k_dict[src_type]
 
             v = v_dict[src_type]
             coords = (coords_dict[src_type],coords_dict[dst_type])
-            # propagate_type: (k: Tensor, q: Tensor, v: Tensor, rel: Tensor)
-            out = self.propagate(edge_index, k=k, q=q_dict[dst_type], v=v, coords=coords, e=e,attn_nn = self.attn_nn[s_edge_type],
-                                 size=None)
+            # propagate_type: (k: Tensor, q: Tensor, v: Tensor, coords: Tensor, e: Tensor, attn_nn: nn.Module)
+            out = self.propagate(
+                edge_index,
+                size=None,
+                k=k,
+                q=q_dict[dst_type],
+                v=v,
+                coords=coords,
+                e=e,
+                attn_nn=self.attn_nn[s_edge_type],
+            )
             out_dict[dst_type].append(out)
 
         # Iterate over node-types:
@@ -211,7 +218,7 @@ class PGHTConv(MessagePassing):
         return out_dict
 
     def message(self, k_j: Tensor, q_i: Tensor, v_j: Tensor, 
-                coords_i: Tensor,coords_j: Tensor, e: Tensor, attn_nn: nn.Module,
+                e: Tensor, coords_i: Tensor,coords_j: Tensor,  attn_nn: nn.Module,
                 index: Tensor, ptr: Optional[Tensor],
                 size_i: Optional[int]) -> Tensor:
         delta_mul = self.coords_mul_nn(coords_i - coords_j)

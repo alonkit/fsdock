@@ -15,7 +15,7 @@ from torch_geometric.loader import DataLoader
 from models.transformer import TransformerDecoder, TransformerEncoder
 
 tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-ds = GFsDockDataset("data/fsdock/smol", "data/tasks_smol.csv",tokenizer=tokenizer, hide_sidechains=True)
+ds = GFsDockDataset('data/fsdock/valid','../docking_cfom/valid_tasks.csv', tokenizer=tokenizer)
 dl = DataLoader(ds, batch_size=4, shuffle=True)
 graph_embedder = GraphEmbedder(
     distance_embed_dim=16,
@@ -58,35 +58,8 @@ interaction_encoder = InteractionEncoder(128)
 model = CfomDock(smiles_encoder, sidechain_decoder, interaction_encoder, graph_encoder)
 model.to('cuda')
 for data in dl:
-    data.get_example(1)
-    print(data.name)
+    data = data['graphs'][0]
     data = data.to('cuda')
     y = model(data.core_tokens, data.sidechain_tokens, data, (data.activity_type, data.label))
     print(y)
-    pass
-data = (data)
-data = ToUndirected()(data)
-# Define the HGTConv layer
-hgt_convs = [
-    PGHTConv(
-        in_channels=16, edge_in_channels=16, out_channels=32, metadata=data.metadata()
-    ),
-    PGHTConv(
-        in_channels=32, edge_in_channels=16, out_channels=32, metadata=data.metadata()
-    ),
-    PGHTConv(
-        in_channels=32, edge_in_channels=16, out_channels=64, metadata=data.metadata()
-    ),
-]
 
-# Forward pass
-feats = dict(data.x_dict)
-for layer in hgt_convs:
-    out = layer(feats, data.edge_index_dict, data.edge_attr_dict, data.pos_dict)
-    for key, value in out.items():
-        if value is not None:
-            feats[key] = value
-    print([(k, v.shape) for k, v in out.items()])
-
-# print(out)
-print([(k, v.shape) for k, v in out.items()])

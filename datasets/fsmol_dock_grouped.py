@@ -25,7 +25,6 @@ from datasets.process_mols import (
     moad_extract_receptor_structure,
     read_molecule,
     get_binding_pockets,
-    hide_sidechains
 )
 from esm import FastaBatchedDataset, pretrained
 
@@ -59,8 +58,7 @@ class GFsDockDataset(Dataset):
         knn_only_graph=False,
         num_workers=1,
         tokenizer=None,
-        hide_sidechains=False,
-        task_size=2,
+        task_size=1,
         load_mols=False
         
     ):
@@ -76,14 +74,12 @@ class GFsDockDataset(Dataset):
         self.ligand_radius = ligand_radius
         self.atom_radius, self.atom_max_neighbors = atom_radius, atom_max_neighbors
         self.knn_only_graph = knn_only_graph
-        self.tasks_dir = f"tasks_rh{remove_hs}"
         self.tasks_file = f"tasks_rh{remove_hs}.pt"
         self.ligands_file = f"ligands.pt"
         self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
         self.saved_ligand_receptor_edge_file = f"protein_ligand_edges_lr{ligand_radius}.pt"
         self.saved_ligand_atom_edge_file = f"protein_ligand_edges_la{ligand_radius}.pt"
         self.tokenizer = tokenizer
-        self._hide_sidechains = hide_sidechains
         self.tasks = {}
         self.load_mols = load_mols
         super().__init__(root, transform)
@@ -103,10 +99,6 @@ class GFsDockDataset(Dataset):
         
     
             
-    def hide_sidechains(self,graph):
-        if self._hide_sidechains:
-                hide_sidechains(graph)
-
     def tokenize_smiles(self,graph):
         if self.tokenizer:
             core_tokens = self.tokenizer.encode(graph.core_smiles).ids
@@ -142,8 +134,8 @@ class GFsDockDataset(Dataset):
                     sub_task[key] = []
                     for i in idxs:
                         graph = deepcopy(task['graphs'][i])
+                        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
                         self.connect_ligand_to_protein(task['name'],i, graph)
-                        self.hide_sidechains(graph)
                         self.tokenize_smiles(graph)
                         sub_task[key].append(graph)
                 else:
@@ -239,7 +231,7 @@ class GFsDockDataset(Dataset):
         except Exception as e:
             get_logger().error(f"Error processing ligand {task_name}, {idx}, {Chem.MolToSmiles(ligand)}")
             get_logger().error(traceback.format_exc())
-            return None
+            return task_name, idx,None
 
     def process_ligand_protein_edges(self):
         receptor_path = osp.join(self.processed_dir, self.saved_ligand_receptor_edge_file)
@@ -252,9 +244,9 @@ class GFsDockDataset(Dataset):
             protein_graph = self.protein_graphs[task['target']]
             ligand_graphs = task['graphs']
             if do_receptors:
-                ligands_receptor_edges[task_name] = self.get_lig_protein_edges(protein_graph, ligand_graphs, "receptor", self.ligand_radius)
+                ligands_receptor_edges[task_name] = self.get_sub_prot_for_lig(protein_graph, ligand_graphs, "receptor", self.ligand_radius)
             if do_atoms:
-                ligands_atom_edges[task_name] = self.get_lig_protein_edges(protein_graph, ligand_graphs, "atom", self.atom_radius)
+                ligands_atom_edges[task_name] = self.get_sub_prot_for_lig(protein_graph, ligand_graphs, "atom", self.atom_radius)
         if do_receptors:
             torch.save(ligands_receptor_edges, receptor_path)
         else:
@@ -280,7 +272,8 @@ class GFsDockDataset(Dataset):
             for assay_id, grouped_rows in tqdm(task_groups,desc='processing tasks'):
                 try:
                     task = self.process_task(assay_id, grouped_rows, self.ligands[assay_id])
-                    tasks[assay_id] = task
+                    if task is not None:
+                        tasks[assay_id] = task
                 except Exception as e:
                     self.logger.error(f"failed to process task {assay_id}, {traceback.format_exc()}")
         
@@ -298,6 +291,7 @@ class GFsDockDataset(Dataset):
             get_lig_graph(
                 ligand,
                 ligand_graph,
+                self.ligand_radius
             )
             ligand_graph.core_smiles = core_smiles
             ligand_graph.sidechains_smiles = sidechains_smiles
@@ -308,11 +302,12 @@ class GFsDockDataset(Dataset):
             task['target'] = row["target_id"]
             task["labels"].append(row["label"])
             task['graphs'].append(ligand_graph)
-            ligands.append(ligand)
+        if task['target'] == '': #nothing is good :(
+            return None
         return task
 
 
-    def get_lig_protein_edges(self, protein_graph, ligand_graphs, protein_node_key, cutoff_distance):
+    def get_sub_prot_for_lig(self, protein_graph, ligand_graphs, protein_node_key, cutoff_distance):
         lig_poses = torch.cat([g["ligand"].pos for g in ligand_graphs], dim=0)
         lig_slices = torch.tensor([0,*(len(g["ligand"].pos) for g in ligand_graphs)])
         lig_slices = torch.cumsum(lig_slices, dim=0)

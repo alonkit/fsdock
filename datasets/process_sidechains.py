@@ -7,6 +7,7 @@ import scaffoldgraph as sg
 import re
 import itertools
 from rdkit.Chem.Scaffolds import MurckoScaffold
+import torch
 try:
     from utils.logging_utils import get_logger
 except:
@@ -82,65 +83,6 @@ def get_mask_of_sidechains(full_mol,sidechains):
         mask[frag_indices] = i + 1            
     return mask
 
-
-def get_core_and_chains_old(m1, chains_weight_threshold=0.):
-    if not isinstance(m1,str):
-        m1 = Chem.MolToSmiles(m1) #kill me please what the f*ck is this
-    m1 = Chem.MolFromSmiles(m1)
-    if m1 is None:
-        return None, None, None, None
-    num_rings = AllChem.CalcNumRings(m1)
-    if num_rings == 0:
-        return None, None, None, None
-    num_fused_rings = get_num_fused_rings(m1)
-    frags = sg.tree_frags_from_mol(m1)
-    clean_core = None
-    m1_weight = AllChem.CalcExactMolWt(m1)
-    for i, cur_frag in enumerate(frags):
-        
-        try:
-            # Chem.SanitizeMol(cur_frag)
-            cur_frag = Chem.MolFromSmiles(Chem.MolToSmiles(cur_frag))
-            frag_weight = AllChem.CalcExactMolWt(cur_frag)
-        except:
-            logger.warning(f"Failed to sanitize fragment {i}, skipping")
-            continue
-        if (m1_weight - frag_weight) / m1_weight > chains_weight_threshold or num_fused_rings != get_num_fused_rings(cur_frag):
-            clean_core = cur_frag
-            break
-    if clean_core is None:
-        return None, None, None, None
-    for a in m1.GetAtoms():
-        a.SetIntProp("__origIdx", a.GetIdx())
-    core = Chem.ReplaceSidechains(m1, clean_core)
-    if core is None:
-        return None, None, None, None
-    core_smiles = Chem.MolToSmiles(core)
-    sanitized_core = Chem.MolFromSmiles(core_smiles)
-    if sanitized_core is None:
-        return None, None, None, None
-    core_clean_smiles = Chem.MolToSmiles(sanitized_core)
-    sidechains = Chem.ReplaceCore(m1, clean_core)
-    sidechains = Chem.MolFromSmiles(Chem.MolToSmiles(sidechains))
-    dummy_atom = Chem.MolFromSmiles('*')
-    clean_sidechains = Chem.DeleteSubstructs(sidechains, dummy_atom)
-    sidechains_smiles = Chem.MolToSmiles(sidechains)
-    if core_clean_smiles == '' or sidechains_smiles == '':
-        return None, None, None, None
-    return clean_core, core_clean_smiles, clean_sidechains ,sidechains_smiles
-
-
-
-def get_mask_of_sub_mol_old(full_mol,*,sub_mols=None,sub_mol=None ):
-    if sub_mols is not None:
-        frags = Chem.GetMolFrags(sub_mols, asMols=True)
-    if sub_mol is not None:
-        frags = [sub_mol]
-    mask = np.zeros(full_mol.GetNumAtoms())
-    for i, frag in enumerate(frags):
-        frag_indices= full_mol.GetSubstructMatch(frag)
-        mask[frag_indices] = i + 1            
-    return mask
 
 if __name__ == '__main__':
     ligand = Chem.MolFromSmiles("O=c1c2ccccc2nc2n1CCCS2")

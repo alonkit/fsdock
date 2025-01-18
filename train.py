@@ -1,6 +1,7 @@
 import scipy.spatial # very important, does not work without it, i don't know why
 import pytorch_lightning as pl
 from tokenizers import Tokenizer
+from datasets.fsmol_dock_grouped import GFsDockDataset
 from datasets.untasked_fsmol_dock import UntaskedFsDockDataset
 from models.cfom_dock import CfomDock
 from models.cfom_dock_lightning import CfomDockLightning
@@ -11,11 +12,13 @@ import datasets.features as features
 from torch_geometric.loader import DataLoader
 from pytorch_lightning.callbacks import ModelCheckpoint
 from models.transformer import TransformerDecoder, TransformerEncoder
+from pytorch_lightning.loggers import WandbLogger
+
 def train_model():
+    wandb_logger = WandbLogger(project="CfomDockLightning", offline=True)
 
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-    ds = UntaskedFsDockDataset("data/fsdock/smol", "data/tasks_smol.csv",tokenizer=tokenizer, hide_sidechains=True)
-    dl = DataLoader(ds, batch_size=4, shuffle=True)
+    
     graph_embedder = GraphEmbedder(
         distance_embed_dim=16,
         cross_distance_embed_dim=16,
@@ -34,7 +37,7 @@ def train_model():
     graph_encoder = GraphEncoder(
         in_channels=16,
         edge_channels=16,
-        hidden_channels=[32, 64, 64],
+        hidden_channels=[32,64],
         out_channels=128,
         attention_groups=4,
         graph_embedder=graph_embedder,
@@ -64,10 +67,18 @@ def train_model():
         dirpath="checkpoints/",
         filename="cfom-dock-{epoch:02d}-{val_loss:.2f}",
     )
-    trainer = pl.Trainer(max_epochs=100, callbacks=[checkpoint_callback])
+    trainer = pl.Trainer(max_epochs=100, callbacks=[checkpoint_callback], logger=wandb_logger)
     
+    dst = GFsDockDataset("data/fsdock/valid", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
+    dlt = DataLoader(dst, batch_size=16, shuffle=True)
+    dlv = dlt
 
-    trainer.fit(lit_model, dl, dl)
+    # dst = GFsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
+    # dlt = DataLoader(dst, batch_size=4, shuffle=True)
+    # dsv = GFsDockDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer)
+    # dlv = DataLoader(dsv, batch_size=4, shuffle=True)
+
+    trainer.fit(lit_model, dlt, dlv)
 
 
 if __name__ == "__main__":

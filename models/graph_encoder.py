@@ -44,7 +44,19 @@ class GraphEncoder(torch.nn.Module):
             )
         self.graph_embedder = graph_embedder
         self.max_length = max_length
-        
+
+    def mask_graph_sidechains(self, graph, molecule_sidechain_mask_idx):
+        device = graph['ligand'].x.device
+        masks = {
+            node_t:(
+                (graph.sidechains_mask < molecule_sidechain_mask_idx).to(device)
+                if node_t == "ligand"
+                else torch.arange(graph[node_t].num_nodes, device=device)
+            )
+            for node_t in graph.metadata()[0]
+        }
+        return graph.subgraph(masks)
+
     def forward(self, data: HeteroData):
         data = self.graph_embedder(data)
         data = ToUndirected()(data)
@@ -77,4 +89,3 @@ class GraphEncoder(torch.nn.Module):
         mask = torch.zeros(batch_size,self.max_length).to(batch_indices.device) + 1
         mask[self._graph_batch_indices_to_sequence(batch_indices)] = 0
         return mask.bool()
-        

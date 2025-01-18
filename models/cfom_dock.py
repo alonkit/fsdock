@@ -19,19 +19,29 @@ class CfomDock(nn.Module):
         return output
 
 
-    def forward(self, smiles_tokens_src, smiles_tokens_tgt, graph_data, interaction_data):
+    def forward(self, smiles_tokens_src, smiles_tokens_tgt, graph_data, interaction_data, molecule_sidechain_mask_idx=1):
         # Transformer Encoder
         smiles_padding_mask = self.text_encoder.create_src_key_padding_mask(smiles_tokens_src)
         smiles_memory = self.text_encoder(smiles_tokens_src, smiles_padding_mask)
+        graph_data = self.graph_encoder.mask_graph_sidechains(graph_data, molecule_sidechain_mask_idx)
         graph_memory = self.graph_encoder(graph_data)
+        graph_memory = graph_memory # need to get mask and do all(0) to get the idx where all are padding
         graph_padding_mask = self.graph_encoder.create_memory_key_padding_mask(graph_data)
         interaction_memory = self.interaction_encoder(*interaction_data).unsqueeze(1)
         interaction_padding_mask = torch.zeros(*interaction_memory.shape[0:2]).bool().to(interaction_memory.device)
+        
+        if smiles_memory.shape[1] == smiles_padding_mask.shape[-1]: # transformer encoder did not take the fast path
+            smiles_memory = smiles_memory[:,~smiles_padding_mask.all(0)]
+        
+        smiles_padding_mask = smiles_padding_mask[:,~smiles_padding_mask.all(0)]
+        graph_memory = graph_memory[:,~graph_padding_mask.all(0)]
+        graph_padding_mask = graph_padding_mask[:,~graph_padding_mask.all(0)]
+        
         # Concatenate encoder output with GNN output
         combined_memory = torch.cat((smiles_memory, graph_memory, interaction_memory), dim=1)
         memory_padding_mask = torch.cat((smiles_padding_mask, graph_padding_mask, interaction_padding_mask), dim=1)
         # Transformer Decoder
-        if self.training:
-            output = self._train_decode(smiles_tokens_tgt, combined_memory,memory_padding_mask)
+        # if self.training:
+        output = self._train_decode(smiles_tokens_tgt, combined_memory,memory_padding_mask)
         # output = self.decoder(smiles_tokens_tgt, combined_memory)
         return output

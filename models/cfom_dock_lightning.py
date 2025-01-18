@@ -20,6 +20,7 @@ class CfomDockLightning(pl.LightningModule):
         self.save_hyperparameters(ignore=['cfom_dock_model', 'loss'])
 
     def training_step(self, data, batch_idx):
+        data = data['graphs'][0]
         logits = self.cfom_dock_model(data.core_tokens, data.sidechain_tokens, data, (data.activity_type, data.label))
         logits = logits.reshape(-1, logits.shape[-1])
         tgt = data.sidechain_tokens.reshape(-1)
@@ -28,11 +29,12 @@ class CfomDockLightning(pl.LightningModule):
         return loss
 
     def validation_step(self, data, batch_idx):
+        data = data['graphs'][0]
         logits = self.cfom_dock_model(data.core_tokens, data.sidechain_tokens, data, (data.activity_type, data.label))
         logits = logits.reshape(-1, logits.shape[-1])
         tgt = data.sidechain_tokens.reshape(-1)
         loss = self.loss(logits, tgt)
-        self.log('train_loss', loss)
+        self.log('train_loss', loss, batch_size=len(data.label))
         return loss
 
     def configure_optimizers(self):

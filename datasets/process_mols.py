@@ -297,13 +297,14 @@ def get_sub_edges(edges, sub_nodes_0=None, sub_nodes_1=None):
     return edges
     
 
-def get_binding_pockets2(protein_graph, ligand_graph: List[Data], lig_rec_edges: List[torch.Tensor], lig_atom_edges: Optional[List[torch.Tensor]]):
+def get_binding_pockets2(protein_graph, ligand_graph: List[Data], lig_rec_edges: torch.Tensor, lig_atom_edges: Optional[torch.Tensor]):
     '''
     adds the binding pocket of the protein to the ligand graphs based on distance.
     computes multiple ligands at once for performance 
     '''
     do_atoms = (lig_atom_edges is not None)
-    
+    lig_atom_edges = lig_atom_edges.clone()
+    lig_rec_edges = lig_rec_edges.clone()
     times = []    
     #receptor receptor & lig receptor
     curr_rec = torch.unique(lig_rec_edges[1])
@@ -385,21 +386,15 @@ def get_lig_graph(mol, complex_graph, lig_max_radius=None):
     edge_type = torch.tensor(edge_type, dtype=torch.long)
     edge_attr = F.one_hot(edge_type, num_classes=len(bonds)).to(torch.float)
 
-
-
-
-
     if mol.GetNumConformers() > 0:
         lig_coords = torch.from_numpy(mol.GetConformer().GetPositions()).float()
         complex_graph['ligand'].pos = lig_coords
     
-    # radius_edges = radius_graph(lig_coords, lig_max_radius)
-
-
+    radius_edges = radius_graph(lig_coords, lig_max_radius)
+    
     complex_graph['ligand'].x = atom_feats
-    complex_graph['ligand', 'lig_bond', 'ligand'].edge_index = edge_index
-    # complex_graph['ligand', 'lig_bond', 'ligand'].radius_edge_index = radius_edges
-    complex_graph['ligand', 'lig_bond', 'ligand'].edge_attr = edge_attr
+    complex_graph['ligand', 'lig_bond', 'ligand'].edge_index = torch.cat((edge_index, radius_edges),dim=-1)
+    complex_graph['ligand', 'lig_bond', 'ligand'].edge_attr = torch.cat((edge_attr, torch.zeros(radius_edges.shape[1],edge_attr.shape[1])),dim=0)
     
     return
 
