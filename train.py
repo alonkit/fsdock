@@ -1,7 +1,8 @@
 import scipy.spatial # very important, does not work without it, i don't know why
 import pytorch_lightning as pl
 from tokenizers import Tokenizer
-from datasets.fsmol_dock_grouped import GFsDockDataset
+import torch
+from datasets.fsmol_dock import FsDockDataset
 from datasets.untasked_fsmol_dock import UntaskedFsDockDataset
 from models.cfom_dock import CfomDock
 from models.cfom_dock_lightning import CfomDockLightning
@@ -13,9 +14,9 @@ from torch_geometric.loader import DataLoader
 from pytorch_lightning.callbacks import ModelCheckpoint
 from models.transformer import TransformerDecoder, TransformerEncoder
 from pytorch_lightning.loggers import WandbLogger
-
+torch.manual_seed(0)
 def train_model():
-    wandb_logger = WandbLogger(project="CfomDockLightning", offline=True)
+    wandb_logger = WandbLogger(project="CfomDockLightning", offline=False)
 
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
     
@@ -55,28 +56,43 @@ def train_model():
     )
     sidechain_decoder = TransformerDecoder(len(tokenizer.get_vocab()), embedding_dim=128,
                                             hidden_size=128, nhead=4,
-                                            n_layers=2, max_length=128, pad_token=tokenizer.token_to_id("<pad>"))
+                                            n_layers=2, max_length=128, pad_token=tokenizer.token_to_id("<pad>"),
+                                            start_token=tokenizer.token_to_id("<bos>"),
+                                            end_token=tokenizer.token_to_id("<eos>"))
     interaction_encoder = InteractionEncoder(128)
     model = CfomDock(smiles_encoder, sidechain_decoder, interaction_encoder, graph_encoder)
     
-    lit_model = CfomDockLightning(model, lr=1e-4, weight_decay=1e-4)
+    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10)
     checkpoint_callback = ModelCheckpoint(
         save_top_k=10,
-        monitor="val_loss",
+        monitor="validation_loss",
         mode="min",
         dirpath="checkpoints/",
-        filename="cfom-dock-{epoch:02d}-{val_loss:.2f}",
+        filename="cfom-dock-{epoch:02d}-{validation_loss:.5f}",
     )
-    trainer = pl.Trainer(max_epochs=100, callbacks=[checkpoint_callback], logger=wandb_logger)
+    trainer = pl.Trainer(
+        max_epochs=100, 
+        callbacks=[checkpoint_callback], 
+        check_val_every_n_epoch=10,
+        strategy='ddp_find_unused_parameters_true',
+        logger=wandb_logger)
     
-    dst = GFsDockDataset("data/fsdock/valid", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
-    dlt = DataLoader(dst, batch_size=16, shuffle=True)
-    dlv = dlt
+    def worker_init_fn(worker_id):
+        worker_info = torch.utils.data.get_worker_info()
+        dataset = worker_info.dataset
+        dataset.sub_proteins.open()
 
-    # dst = GFsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
-    # dlt = DataLoader(dst, batch_size=4, shuffle=True)
-    # dsv = GFsDockDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer)
-    # dlv = DataLoader(dsv, batch_size=4, shuffle=True)
+    # dst = FsDockDataset("data/fsdock/valid", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
+    # dlt = DataLoader(dst, batch_size=64, shuffle=True, num_workers=torch.get_num_threads(), 
+    #                 worker_init_fn=worker_init_fn)
+    # dlv = dlt
+
+    dst = FsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
+    dlt = DataLoader(dst, batch_size=64, shuffle=True, num_workers=torch.get_num_threads(), 
+                    worker_init_fn=worker_init_fn)
+    dsv = FsDockDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer)
+    dlv = DataLoader(dsv, batch_size=64,num_workers=torch.get_num_threads()//2, 
+                    worker_init_fn=worker_init_fn)
 
     trainer.fit(lit_model, dlt, dlv)
 

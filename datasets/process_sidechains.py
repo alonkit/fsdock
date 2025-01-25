@@ -1,6 +1,6 @@
 import numpy as np
 import random
-from rdkit import Chem
+from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
 import pandas as pd
 import scaffoldgraph as sg
@@ -89,6 +89,25 @@ if __name__ == '__main__':
     core, core_smiles, sidechains ,sidechains_smiles = get_core_and_chains(ligand)
     core_indices = get_mask_of_sidechains(ligand,core)
     sidechain_indices = get_mask_of_sidechains(ligand,sidechains)
+
+
+def smiles_valid(smiles,verbose=False):
+    if smiles is None:
+        return False
+    mol = Chem.MolFromSmiles(smiles)
+    if mol:
+        return True
+    print(smiles)
+    return False
+
+def get_fp(mol):
+    if isinstance(mol, str):
+        mol = Chem.MolFromSmiles(mol)
+    fp_obj = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048,
+                                                   useChirality=False)
+    fp = np.zeros((0,), dtype=np.int8)
+    DataStructs.ConvertToNumpyArray(fp_obj, fp)
+    return fp
 
 def reconstruct_from_core_and_chains(core, chains):
     chains = Chem.MolFromSmiles(chains)
