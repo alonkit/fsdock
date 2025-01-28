@@ -9,7 +9,7 @@ from models.graph_embedder import GraphEmbedder
 from models.graph_encoder import GraphEncoder
 from models.interaction_encoder import InteractionEncoder
 from models.layers.point_graph_transformer_conv import PGHTConv
-import datasets.features as features
+import datasets.process_chem.features as features
 from torch_geometric.loader import DataLoader
 
 from models.transformer import TransformerDecoder, TransformerEncoder

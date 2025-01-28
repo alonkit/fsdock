@@ -1,3 +1,6 @@
+from collections import defaultdict
+import random
+import numpy as np
 import pytorch_lightning as pl
 import torch
 from torch import nn
@@ -5,11 +8,27 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from datasets.process_sidechains import get_fp, reconstruct_from_core_and_chains
+from datasets.process_chem.process_sidechains import (
+    calc_tani_sim,
+    get_fp,
+    reconstruct_from_core_and_chains,
+)
 from models.cfom_dock import CfomDock
 
+
 class CfomDockLightning(pl.LightningModule):
-    def __init__(self, cfom_dock_model:CfomDock,tokenizer, lr, weight_decay, num_gen_samples, loss=None):
+    def __init__(
+        self,
+        cfom_dock_model: CfomDock,
+        tokenizer,
+        lr,
+        weight_decay,
+        num_gen_samples,
+        loss=None,
+        validation_clfs=None,
+        similarity_threshold=0.4,
+        gen_meta_params=None
+    ):
         super().__init__()
         self.cfom_dock_model = cfom_dock_model
         self.num_gen_samples = num_gen_samples
@@ -17,44 +36,141 @@ class CfomDockLightning(pl.LightningModule):
         if loss is None:
             loss = nn.CrossEntropyLoss()
         self.loss = loss
-        
+        self._reset_validation_step_outputs()
         self.weight_decay = weight_decay
         self.lr = lr
-        self.save_hyperparameters(ignore=['cfom_dock_model', 'loss','tokenizer'])
+        self.validation_clfs = validation_clfs
+        self.similarity_threshold = similarity_threshold
+        self.gen_meta_params = gen_meta_params or {"p":1.}
+        self.save_hyperparameters(
+            ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs"]
+        )
+
+
+    def _reset_validation_step_outputs(self):
+        self.validation_step_outputs = defaultdict(lambda: defaultdict(list))
+    
+    def training_step(self, data, batch_idx):
+        logits = self.cfom_dock_model(
+            data.core_tokens,
+            data.sidechain_tokens[:, :-1],
+            data,
+            (data.activity_type, data.label),
+        )
+        logits = logits.reshape(-1, logits.shape[-1])
+        tgt = data.sidechain_tokens[:, 1:].reshape(-1)
+        loss = self.loss(logits, tgt)
+        self.log("train_loss", loss, sync_dist=True)
+        return loss
 
     def generate_samples(self, data):
-        samples = self.cfom_dock_model.generate_samples(self.num_gen_samples, data.core_tokens, data.core_smiles, data, (data.activity_type, 1))
+        sidechains_list = self.cfom_dock_model.generate_samples(
+            self.num_gen_samples,
+            data.core_tokens,
+            data.core_smiles,
+            data,
+            (data.activity_type, [1] * len(data)),
+            **self.gen_meta_params
+        )
         # we want to genenerate good samples so we give label=1
-        samples = self.tokenizer.decode_batch(samples, skip_special_tokens=True)
+        sidechains_list = self.tokenizer.decode_batch(sidechains_list, skip_special_tokens=True)
         new_mols = []
-        for core, chains in samples.items():
-            new_mol = reconstruct_from_core_and_chains(core, chains)
-            new_mols.append((new_mol, get_fp(new_mol)))
-        return new_mols          
+        for core, chains, old_smile in zip(data.core_smiles, sidechains_list, data.smiles):
+            new_smile = reconstruct_from_core_and_chains(core, chains)
+            new_smile = data.smiles[0] # !! delete later
+            if new_smile is None:
+                new_mols.append((new_smile, old_smile, None))
+            else:
+                new_mols.append((new_smile, old_smile, get_fp(new_smile)))
+        return new_mols
 
-    def training_step(self, data, batch_idx):
-        data = data['graphs'][0]
-        logits = self.cfom_dock_model(data.core_tokens, data.sidechain_tokens, data, (data.activity_type, data.label))
-        logits = logits.reshape(-1, logits.shape[-1])
-        tgt = data.sidechain_tokens.reshape(-1)
-        loss = self.loss(logits, tgt)
-        self.log('train_loss', loss, sync_dist=True)
-        return loss
 
-    def validation_step(self, batch, batch_idx):
-        data = batch['graphs'][0]
-        new_mols = self.generate_samples(data)
-        
-        
-        classifiers = batch['clf']
-        logits = self.cfom_dock_model(data.core_tokens, data.sidechain_tokens, data, (data.activity_type, data.label))
-        logits = logits.reshape(-1, logits.shape[-1])
-        tgt = data.sidechain_tokens.reshape(-1)
-        loss = self.loss(logits, tgt)
-        self.log('validation_loss', loss, batch_size=len(data.label), sync_dist=True)
-        return loss
+    def validation_step(self, graph, batch_idx):
+        if not self.validation_clfs:
+            return
+        gen_res = self.generate_samples(graph)
+        for (new_sm, old_sm, new_fp), task_name in zip(gen_res, graph.task):
+            self.validation_step_outputs[task_name][old_sm].append((new_sm, new_fp))
+
+    def evaluate_single_task(
+        self, task_name, opt_molecules, clf, threshold, similarity_threshold
+    ):
+        all_success_rates, all_diversities, all_similarities = [], [], []
+        all_valid_samples, num_molecules = [], 0
+        for old_sm in opt_molecules.keys():
+            for new_sm, _ in opt_molecules[old_sm]:
+                num_molecules += 1
+                if new_sm is not None and new_sm != old_sm:
+                    all_valid_samples.append(new_sm)
+        for _ in range(self.num_gen_samples):
+            chosen_mols, similarities, tot_success = [], [], 0
+            for old_sm in opt_molecules.keys():
+                candidates = [
+                        (new_mol,new_fp)
+                        for new_mol, new_fp in opt_molecules[old_sm]
+                        if new_mol and new_mol != old_sm
+                    ]
+                if len(candidates) == 0:
+                    continue
+                candidates, cand_fps = zip(*candidates)
+                chosen_candidate_i = random.randint(0, len(candidates)-1)
+                chosen_candidate = candidates[chosen_candidate_i]
+                cand_fp = cand_fps[chosen_candidate_i]
+                chosen_mols.append(chosen_candidate)
+                cur_sim = calc_tani_sim(old_sm, chosen_candidate)
+                similarities.append(cur_sim)
+                cur_score = clf.predict_proba(np.reshape(cand_fp, (1, -1)))
+                cur_score = cur_score[0][1]
+                if cur_score > threshold and cur_sim > similarity_threshold:
+                    tot_success += 1
+            all_success_rates.append(tot_success / len(opt_molecules.keys()))
+            all_diversities.append(len(set(chosen_mols)) / max(1, len(chosen_mols)))
+            all_similarities.append(sum(similarities) / max(1, len(chosen_mols)))
+        avg_diversity, std_diversity = np.mean(all_diversities), np.std(all_diversities)
+        avg_similarity, std_similarity = np.mean(all_similarities), np.std(
+            all_similarities
+        )
+        avg_success, std_success = np.mean(all_success_rates), np.std(all_success_rates)
+        validity = len(all_valid_samples) / num_molecules
+        return (
+            validity,
+            avg_diversity,
+            std_diversity,
+            avg_similarity,
+            std_similarity,
+            avg_success,
+            std_success,
+        )
+
+    def on_validation_epoch_end(self):
+        tot_avg_success = []
+        for task_name, opt_molecules in self.validation_step_outputs.items():
+            (
+                validity,
+                avg_diversity,
+                std_diversity,
+                avg_similarity,
+                std_similarity,
+                avg_success,
+                std_success,
+            ) = self.evaluate_single_task(
+                task_name,
+                opt_molecules,
+                self.validation_clfs[task_name][0],
+                self.validation_clfs[task_name][1],
+                self.similarity_threshold,
+            )
+            self.log(f"{task_name}_validity", validity, sync_dist=True)
+            self.log(f"{task_name}_diversity", avg_diversity, sync_dist=True)
+            self.log(f"{task_name}_std_diversity", std_diversity, sync_dist=True)
+            self.log(f"{task_name}_similarity", avg_similarity, sync_dist=True)
+            self.log(f"{task_name}_std_similarity", std_similarity, sync_dist=True)
+            self.log(f"{task_name}_success", avg_success, sync_dist=True)
+            self.log(f"{task_name}_std_success", std_success, sync_dist=True)
+            tot_avg_success.append(avg_success)
+        self.log("validation_avg_success", sum(tot_avg_success) / len(tot_avg_success), sync_dist=True)
+        self._reset_validation_step_outputs()
 
     def configure_optimizers(self):
-        optimizer = Adam(self.parameters(), lr=self.lr , weight_decay=self.weight_decay)
+        optimizer = Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         return optimizer
-

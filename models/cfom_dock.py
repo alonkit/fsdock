@@ -89,13 +89,13 @@ class CfomDock(nn.Module):
         combined_memory, memory_padding_mask = self._create_memory(
             smiles_tokens_src, graph_data, interaction_data, molecule_sidechain_mask_idx
         )
-        samples = defaultdict(list)
+        sidechains_list = []
         for i in range(num_samples):
             batch_samples = self.decoder.generate(combined_memory, memory_padding_mask, **kwargs)
             batch_samples = batch_samples.cpu().numpy()
             for sidechains, core in zip(batch_samples, smiles_src):
-                samples[core].append(sidechains)
-        return samples
+                sidechains_list.append(sidechains)
+        return sidechains_list
 
     def forward(
         self,

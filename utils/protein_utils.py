@@ -1,6 +1,6 @@
 import numpy as np
 import prody as pr
-from datasets.parse_chi import aa_idx2aa_short, get_onehot_sequence
+from datasets.process_chem.parse_chi import aa_idx2aa_short, get_onehot_sequence
 
 
 def get_sequences_from_protein(pdb):

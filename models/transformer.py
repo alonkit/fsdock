@@ -69,14 +69,16 @@ class TransformerDecoder(nn.Module):
         return next(self.parameters()).device
 
     def _generate_square_subsequent_mask(self, sz, device):
-        mask = (torch.triu(torch.ones((sz, sz), device=device), diagonal=0) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        return (torch.triu(torch.ones((sz, sz), device=device), diagonal=0) == 1)
+        
+        # mask = (torch.triu(torch.ones((sz, sz), device=device), diagonal=0) == 1).transpose(0, 1)
+        # mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        # return mask
 
 
     def create_target_masks(self, tgt):
         tgt_seq_len = tgt.shape[1]
-        tgt_mask = self._generate_square_subsequent_mask(tgt_seq_len, tgt.device)
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_seq_len, tgt.device)
         tgt_padding_mask = (tgt == self.pad_token)
         return tgt_mask, tgt_padding_mask
 
@@ -94,15 +96,16 @@ class TransformerDecoder(nn.Module):
         assert (k is not None) != (p is not None), "must use only one option, topp or topk"
         batch_size = cond_memory.shape[0]
         max_len = max_len or self.seq_len
+        device = cond_memory.device
         if prefix is None:
-            ys = torch.ones(batch_size, 1).fill_(self.start_token).type(torch.long).type_as(cond_memory)
+            ys = torch.ones(batch_size, 1).type(torch.int).fill_(self.start_token).to(device)
             generation_length = max_len - 1
         else:
-            ys = torch.tensor(prefix).reshape(batch_size, -1).type_as(cond_memory)
+            ys = torch.tensor(prefix).reshape(batch_size, -1).to(device)
             generation_length = max_len - len(prefix)
-        finished_sample = torch.zeros(batch_size).bool().type_as(cond_memory)
+        finished_sample = torch.zeros(batch_size).bool().to(device)
         for i in range(generation_length):
-            out = self(ys, cond_memory, target_mask=None,memory_key_padding_mask=memory_key_padding_mask, memory_mask=memory_mask)
+            out = self(ys, cond_memory, target_mask=None,target_padding_mask=None, memory_key_padding_mask=memory_key_padding_mask, memory_mask=memory_mask)
             probs = torch.softmax(out, dim=2)
             sorted_probs, sorted_indices = torch.sort(probs[:, -1, :], descending=True)
             if k is not None:
@@ -114,12 +117,12 @@ class TransformerDecoder(nn.Module):
                     top_p_mask[:,0] = False
                 sorted_probs[top_p_mask] = 0
             remainder_sum = torch.sum(sorted_probs, 1)
-            sorted_probs = sorted_probs / remainder_sum
-            next_sorted_token = torch.multinomial(sorted_probs, 1)
-            next_token_id = sorted_indices[:, next_sorted_token]
+            sorted_probs = sorted_probs / remainder_sum.unsqueeze(-1)
+            next_sorted_token = torch.multinomial(sorted_probs, 1).squeeze(-1)
+            next_token_id = sorted_indices[torch.arange(sorted_indices.shape[0]), next_sorted_token]
             next_token_id[finished_sample] = self.pad_token
-            ys = torch.cat([ys,next_token_id], dim=1)
+            ys = torch.cat([ys,next_token_id.unsqueeze(-1)], dim=1) 
             finished_sample = finished_sample | (next_token_id == self.end_token)
-            if finished_sample.all():
+            if finished_sample.all() or ys.shape[1] == max_len:
                 break
         return ys

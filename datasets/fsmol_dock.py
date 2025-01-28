@@ -19,7 +19,7 @@ from torch_geometric.data.dataset import files_exist
 from torch_geometric.nn.pool import radius
 import prody as pr
 from tqdm import tqdm
-from datasets.process_mols import (
+from datasets.process_chem.process_mols import (
     get_binding_pockets2,
     get_lig_graph,
     moad_extract_receptor_structure,
@@ -28,7 +28,7 @@ from datasets.process_mols import (
 )
 from esm import FastaBatchedDataset, pretrained
 
-from datasets.process_sidechains import get_core_and_chains, get_mask_of_sidechains
+from datasets.process_chem.process_sidechains import get_core_and_chains, get_mask_of_sidechains, get_mol_smiles
 from utils.esm_utils import compute_ESM_embeddings
 from utils.logging_utils import get_logger
 from utils.map_file_manager import MapFileManager
@@ -59,7 +59,6 @@ class FsDockDataset(Dataset):
         knn_only_graph=False,
         num_workers=1,
         tokenizer=None,
-        task_size=1,
         load_mols=False,
     ):
         if isinstance(tasks, str):
@@ -85,18 +84,16 @@ class FsDockDataset(Dataset):
         super().__init__(root, transform)
         if not hasattr(self, "protein_graphs"):
             self.load()
-        
-        self._split_indexes = self.split_tasks(task_size)
+        self.task_sizes = {k: len(v["graphs"]) for k, v in self.tasks.items()}
+        self._indices = self.get_indices()
 
 
-    def split_tasks(self, task_size):
+    def get_indices(self):
         split_indexes = []
         for task_name, task in self.tasks.items():
-            shuff_idx = list(range(len(task["graphs"])))
-            random.shuffle(shuff_idx)
-            for i, offset in enumerate(range(0, len(task["graphs"]), task_size)):
+            for i in range(len(task["graphs"])):
                 split_indexes.append(
-                    (task_name, shuff_idx[offset : offset + task_size])
+                    (task_name, i)
                 )
         return split_indexes
 
@@ -126,7 +123,7 @@ class FsDockDataset(Dataset):
         return data
 
     def len(self):
-        return len(self._split_indexes)
+        return len(self._indices)
 
     def _create_sub_task(self, task, idxs):
         sub_task = {}
@@ -146,9 +143,26 @@ class FsDockDataset(Dataset):
                     sub_task[key] = deepcopy([value[i] for i in idxs])
         return sub_task
 
-    def get(self, idx):
-        task_name, sub_idxs = self._split_indexes[idx]
-        return self._create_sub_task(self.tasks[task_name], sub_idxs)
+    def __getitem__(self, idx):
+        if isinstance(idx, tuple):
+            task_name, i = idx
+        else:
+            task_name, i = self._indices[idx]
+        
+        graph = deepcopy(self.tasks[task_name]["graphs"][i])
+        graph.task = task_name
+        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
+        self.connect_ligand_to_protein(self.tasks[task_name]["name"], i, graph)
+        self.tokenize_smiles(graph)
+        return graph
+
+    def get_task_metadata(self, task_name):
+        task = self.tasks[task_name]
+        data = {}
+        for key, val in task.items():
+            if not isinstance(val, list):
+                data[key] = val
+        return data
 
     def task_names(self):
         if hasattr(self, "_task_names"):
@@ -224,6 +238,7 @@ class FsDockDataset(Dataset):
             ligand = read_molecule(ligand_path, sanitize=True)
             if ligand is None:
                 return task_name, idx, None
+            smiles = get_mol_smiles(ligand)
             core, core_smiles, sidechains, sidechains_smiles = get_core_and_chains(
                 ligand
             )
@@ -238,6 +253,7 @@ class FsDockDataset(Dataset):
                 idx,
                 (
                     ligand,
+                    smiles,
                     core,
                     core_smiles,
                     sidechains,
@@ -255,7 +271,7 @@ class FsDockDataset(Dataset):
     def process_sub_proteins(self):
         path = osp.join(self.processed_dir, self.saved_ligand_sub_protein_file)
         if files_exist([path]):
-            self.sub_proteins = np.load(path, allow_pickle=True)
+            self.sub_proteins = MapFileManager(path, 'r').open()
             return
         with MapFileManager(path, 'w') as mf:
             for task_name, task in tqdm(
@@ -394,6 +410,7 @@ class FsDockDataset(Dataset):
                 continue
             (
                 ligand,
+                smiles,
                 core,
                 core_smiles,
                 sidechains,
@@ -402,6 +419,7 @@ class FsDockDataset(Dataset):
             ) = ligand_data
             ligand_graph = HeteroData()
             get_lig_graph(ligand, ligand_graph, self.ligand_radius)
+            ligand_graph.smiles = smiles
             ligand_graph.core_smiles = core_smiles
             ligand_graph.sidechains_smiles = sidechains_smiles
             ligand_graph.sidechains_mask = sidechains_mask
