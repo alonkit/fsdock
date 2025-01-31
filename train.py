@@ -40,9 +40,15 @@ def get_model(tokenizer):
         lm_embedding_dim=1280,
     )
     graph_encoder = GraphEncoder(
+<<<<<<< HEAD
         in_channels=32,
         edge_channels=32,
         hidden_channels=[64,128, 256],
+=======
+        in_channels=16,
+        edge_channels=16,
+        hidden_channels=[32,64,128],
+>>>>>>> working on holes, too drunk
         out_channels=128,
         attention_groups=8,
         graph_embedder=graph_embedder,

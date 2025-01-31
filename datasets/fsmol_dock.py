@@ -28,7 +28,7 @@ from datasets.process_chem.process_mols import (
 )
 from esm import FastaBatchedDataset, pretrained
 
-from datasets.process_chem.process_sidechains import get_core_and_chains, get_mask_of_sidechains, get_mol_smiles
+from datasets.process_chem.process_sidechains import get_core_and_chains, get_mask_of_sidechains, get_mol_smiles, set_hole_ids
 from utils.esm_utils import compute_ESM_embeddings
 from utils.logging_utils import get_logger
 from utils.map_file_manager import MapFileManager

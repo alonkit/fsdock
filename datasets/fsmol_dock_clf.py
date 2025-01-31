@@ -120,7 +120,7 @@ class FsDockClfDataset(FsDockDataset):
                 ligand
             )
             if core is None:
-                core_smiles = add_attachment_points(smiles, 2)
+                core_smiles = add_attachment_points(ligand, 2)
                 if core_smiles is None:
                     get_logger().warning(
                         f"couldnt extract core: {task_name}, {idx}, {Chem.MolToSmiles(ligand)}"
@@ -129,6 +129,8 @@ class FsDockClfDataset(FsDockDataset):
                 sidechains_smiles = ''
             else:
                 sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
+            set_hole_ids(ligand, core)
+            
             return (
                 task_name,
                 idx,

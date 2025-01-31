@@ -71,6 +71,7 @@ def get_core_and_chains(m1):
     if clean_core is None:
         return None, None, None, None
     core = Chem.ReplaceSidechains(m1, clean_core)
+    set_hole_ids(m1, core)
     sidechains = Chem.ReplaceCore(m1, clean_core)
     if core is None or sidechains is None:
         return None, None, None, None
@@ -88,7 +89,12 @@ def get_mask_of_sidechains(full_mol,sidechains):
         mask[frag_indices] = i + 1            
     return mask
 
-
+def set_hole_ids(mol, core):
+    for atom in core.GetAtoms():
+        if atom.GetSymbol() == '*':
+            for neighbor in atom.GetNeighbors():
+                mol.GetAtomWithIdx(neighbor.GetIntProp("__origIdx")).SetIntProp("__holeIdx", atom.GetIsotope())
+    
 if __name__ == '__main__':
     ligand = Chem.MolFromSmiles("O=c1c2ccccc2nc2n1CCCS2")
     core, core_smiles, sidechains ,sidechains_smiles = get_core_and_chains(ligand)
@@ -172,8 +178,9 @@ def isotopize_dummies(fragment, isotope):
     return fragment
 
 
-def add_attachment_points(smiles, n, seed=None, fg_weight=0, fg_list=[]):
-    mol = Chem.MolFromSmiles(smiles)
+def add_attachment_points(mol, n, seed=None, fg_weight=0, fg_list=[]):
+    if isinstance(mol, str):
+        mol = Chem.MolFromSmiles(mol)
     if mol is None:
         return None
     if seed is not None:
@@ -212,6 +219,6 @@ def add_attachment_points(smiles, n, seed=None, fg_weight=0, fg_list=[]):
 
     current_mol = Chem.RemoveHs(current_mol)
     current_mol.UpdatePropertyCache()
-
+    set_hole_ids(mol, current_mol)
     current_smiles = Chem.MolToSmiles(current_mol)
     return current_smiles

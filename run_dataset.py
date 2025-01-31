@@ -14,7 +14,9 @@ from datasets.task_data_loader import TaskDataLoader
 torch.multiprocessing.set_sharing_strategy('file_system')
 from torch_geometric.data import Dataset, HeteroData, makedirs, Batch
 
-# ds = FsDockDataset('data/fsdock/smol','data/fsdock/tasks_smol.csv', num_workers=2)
+ds = FsDockDataset('data/fsdock/smol','data/fsdock/smol_tasks.csv', num_workers=2)
+exit()
+
 # # # # ds = FsDockDataset('data/fsdock/single','data/single.csv', num_workers=2)
 # # ds = FsDockDataset('data/fsdock/valid','../docking_cfom/valid_tasks.csv', num_workers=torch.get_num_threads())
 

@@ -51,6 +51,7 @@ def lig_atom_featurizer(mol):
             allowable_features['possible_is_in_ring7_list'].index(ringinfo.IsAtomInRingOfSize(idx, 7)),
             allowable_features['possible_is_in_ring8_list'].index(ringinfo.IsAtomInRingOfSize(idx, 8)),
             #g_charge if not np.isnan(g_charge) and not np.isinf(g_charge) else 0.
+            safe_index(allowable_features['possible_atomic_num_list'], atom.GetAtomicNum()),
         ])
     return torch.tensor(atom_features_list)
 

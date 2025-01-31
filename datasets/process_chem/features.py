@@ -1,6 +1,7 @@
 from rdkit.Chem.rdchem import BondType as BT
 
 allowable_features = {
+    'possible_hole_ids': list(range(0, 26)),
     'possible_atomic_num_list': list(range(1, 119)) + ['misc'],
     'possible_chirality_list': [
         'CHI_UNSPECIFIED',
@@ -36,6 +37,7 @@ allowable_features = {
 bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
 
 lig_feature_dims = (list(map(len, [
+    allowable_features['possible_hole_ids'],
     allowable_features['possible_atomic_num_list'],
     allowable_features['possible_chirality_list'],
     allowable_features['possible_degree_list'],
