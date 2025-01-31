@@ -32,7 +32,7 @@ def get_model(tokenizer):
         cross_max_distance=10,
         lig_feature_dims=features.lig_feature_dims,
         lig_edge_feature_dim=4,
-        lig_emb_dim=16,
+        lig_emb_dim=32,
         rec_feature_dims=features.rec_residue_feature_dims,
         atom_feature_dims=features.rec_atom_feature_dims,
         prot_emd_dim=16,
@@ -42,9 +42,9 @@ def get_model(tokenizer):
     graph_encoder = GraphEncoder(
         in_channels=16,
         edge_channels=16,
-        hidden_channels=[32,64],
+        hidden_channels=[32,64, 128],
         out_channels=128,
-        attention_groups=4,
+        attention_groups=8,
         graph_embedder=graph_embedder,
         dropout=0.1,
         max_length=128
