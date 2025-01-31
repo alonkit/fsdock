@@ -94,7 +94,14 @@ def set_hole_ids(mol, core):
         if atom.GetSymbol() == '*':
             for neighbor in atom.GetNeighbors():
                 mol.GetAtomWithIdx(neighbor.GetIntProp("__origIdx")).SetIntProp("__holeIdx", atom.GetIsotope())
-    
+
+def get_holes(mol):
+    hole_lst = np.zeros(mol.GetNumAtoms())
+    for i, atom in enumerate(mol.GetAtoms()):
+        if atom.HasProp("__holeIdx"):
+            hole_lst[i] = atom.GetIntProp("__holeIdx")
+    return hole_lst
+
 if __name__ == '__main__':
     ligand = Chem.MolFromSmiles("O=c1c2ccccc2nc2n1CCCS2")
     core, core_smiles, sidechains ,sidechains_smiles = get_core_and_chains(ligand)

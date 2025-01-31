@@ -28,7 +28,7 @@ from datasets.process_chem.process_mols import (
 )
 from esm import FastaBatchedDataset, pretrained
 
-from datasets.process_chem.process_sidechains import get_core_and_chains, get_mask_of_sidechains, get_mol_smiles, set_hole_ids
+from datasets.process_chem.process_sidechains import get_core_and_chains, get_holes, get_mask_of_sidechains, get_mol_smiles, set_hole_ids
 from utils.esm_utils import compute_ESM_embeddings
 from utils.logging_utils import get_logger
 from utils.map_file_manager import MapFileManager
@@ -248,6 +248,7 @@ class FsDockDataset(Dataset):
                 )
                 return task_name, idx, None
             sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
+            hole_features = get_holes(ligand)
             return (
                 task_name,
                 idx,
@@ -259,6 +260,7 @@ class FsDockDataset(Dataset):
                     sidechains,
                     sidechains_smiles,
                     sidechains_mask,
+                    hole_features,
                 ),
             )
         except Exception as e:
@@ -416,6 +418,7 @@ class FsDockDataset(Dataset):
                 sidechains,
                 sidechains_smiles,
                 sidechains_mask,
+                hole_features
             ) = ligand_data
             ligand_graph = HeteroData()
             get_lig_graph(ligand, ligand_graph, self.ligand_radius)
