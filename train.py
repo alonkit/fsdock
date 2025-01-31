@@ -16,12 +16,14 @@ from torch_geometric.loader import DataLoader
 from pytorch_lightning.callbacks import ModelCheckpoint
 from models.transformer import TransformerDecoder, TransformerEncoder
 from pytorch_lightning.loggers import WandbLogger
-torch.manual_seed(0)
-def train_model():
-    wandb_logger = WandbLogger(project="CfomDockLightning", offline=True)
+import os
 
-    tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-    
+from utils.logging_utils import get_logger
+
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
+torch.manual_seed(0)
+
+def get_model(tokenizer):
     graph_embedder = GraphEmbedder(
         distance_embed_dim=16,
         cross_distance_embed_dim=16,
@@ -63,20 +65,46 @@ def train_model():
                                             end_token=tokenizer.token_to_id("<eos>"))
     interaction_encoder = InteractionEncoder(128)
     model = CfomDock(smiles_encoder, sidechain_decoder, interaction_encoder, graph_encoder)
+    return model
+
+def worker_init_fn(worker_id):
+    worker_info = torch.utils.data.get_worker_info()
+    dataset = worker_info.dataset
+    dataset.sub_proteins.open()   
+
+
+def test_model():
+    get_logger().info("Testing model")
+    tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
+    model = get_model(tokenizer)
+
+
+    dst = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
+    dlt = DataLoader(dst, batch_size=64, 
+                         num_workers=torch.get_num_threads()//2, 
+                        worker_init_fn=worker_init_fn)
     
+    
+    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, test_clfs=dst.clfs)
+    trainer = pl.Trainer(
+        max_epochs=100, 
+        check_val_every_n_epoch=10,
+        strategy='ddp_find_unused_parameters_true')
+    trainer.test(lit_model, dlt, ckpt_path="checkpoints/cfom-dock-epoch=79-validation_loss=0.00000.ckpt")
+
+def train_model():
+    wandb_logger = WandbLogger(project="CfomDockLightning", offline=False)
+
+    tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
+    model = get_model(tokenizer)
+
     checkpoint_callback = ModelCheckpoint(
         save_top_k=10,
         monitor="validation_avg_success",
         mode="max",
         dirpath="checkpoints/",
-        filename="cfom-dock-{epoch:02d}-{validation_loss:.5f}",
+        filename="cfom-dock-{epoch:02d}-{validation_avg_success:.5f}",
     )
-
-    
-    def worker_init_fn(worker_id):
-        worker_info = torch.utils.data.get_worker_info()
-        dataset = worker_info.dataset
-        dataset.sub_proteins.open()
 
     # dst = FsDockDataset("data/fsdock/valid", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
     dst = FsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
@@ -100,10 +128,6 @@ def train_model():
 
 
 if __name__ == "__main__":
-    train_model()
-# Example usage:
-# train_texts = ["example sentence 1", "example sentence 2"]
-# train_labels = [0, 1]
-# val_texts = ["example validation sentence 1", "example validation sentence 2"]
-# val_labels = [0, 1]
-# train_model(train_texts, train_labels, val_texts, val_labels)
+    # train_model()
+    test_model()
+    

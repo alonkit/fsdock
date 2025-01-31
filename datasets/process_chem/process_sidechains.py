@@ -215,4 +215,3 @@ def add_attachment_points(smiles, n, seed=None, fg_weight=0, fg_list=[]):
 
     current_smiles = Chem.MolToSmiles(current_mol)
     return current_smiles
-

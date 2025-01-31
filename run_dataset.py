@@ -38,9 +38,10 @@ def worker_init_fn(worker_id):
 # for t in tqdm(ds):
 #     pass     
 # exit()
-dsv = FsDockClfDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv")
+# dsv = FsDockClfDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv", num_workers=torch.get_num_threads())
+dsv = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv", num_workers=torch.get_num_threads())
 dlv = DataLoader(dsv, batch_size=64, 
-                        num_workers=torch.get_num_threads()//2, 
+                        num_workers=torch.get_num_threads(), 
                     worker_init_fn=worker_init_fn)
 
 for t in tqdm(dsv):

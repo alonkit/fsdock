@@ -1,6 +1,8 @@
 from collections import defaultdict
+from datetime import datetime
 import random
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 from torch import nn
@@ -14,6 +16,7 @@ from datasets.process_chem.process_sidechains import (
     reconstruct_from_core_and_chains,
 )
 from models.cfom_dock import CfomDock
+from utils.logging_utils import configure_logger, get_logger
 
 
 class CfomDockLightning(pl.LightningModule):
@@ -26,6 +29,7 @@ class CfomDockLightning(pl.LightningModule):
         num_gen_samples,
         loss=None,
         validation_clfs=None,
+        test_clfs=None,
         similarity_threshold=0.4,
         gen_meta_params=None
     ):
@@ -36,19 +40,21 @@ class CfomDockLightning(pl.LightningModule):
         if loss is None:
             loss = nn.CrossEntropyLoss()
         self.loss = loss
-        self._reset_validation_step_outputs()
+        self._reset_eval_step_outputs()
         self.weight_decay = weight_decay
         self.lr = lr
         self.validation_clfs = validation_clfs
+        self.test_clfs = test_clfs
         self.similarity_threshold = similarity_threshold
         self.gen_meta_params = gen_meta_params or {"p":1.}
         self.save_hyperparameters(
-            ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs"]
+            ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs"]
         )
+        self.test_result_path = f'test_stats/{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}.csv'
 
 
-    def _reset_validation_step_outputs(self):
-        self.validation_step_outputs = defaultdict(lambda: defaultdict(list))
+    def _reset_eval_step_outputs(self):
+        self.eval_step_outputs = defaultdict(lambda: defaultdict(list))
     
     def training_step(self, data, batch_idx):
         logits = self.cfom_dock_model(
@@ -64,7 +70,7 @@ class CfomDockLightning(pl.LightningModule):
         return loss
 
     def generate_samples(self, data):
-        sidechains_list = self.cfom_dock_model.generate_samples(
+        sidechains_lists = self.cfom_dock_model.generate_samples(
             self.num_gen_samples,
             data.core_tokens,
             data.core_smiles,
@@ -73,15 +79,15 @@ class CfomDockLightning(pl.LightningModule):
             **self.gen_meta_params
         )
         # we want to genenerate good samples so we give label=1
-        sidechains_list = self.tokenizer.decode_batch(sidechains_list, skip_special_tokens=True)
         new_mols = []
-        for core, chains, old_smile in zip(data.core_smiles, sidechains_list, data.smiles):
-            new_smile = reconstruct_from_core_and_chains(core, chains)
-            new_smile = data.smiles[0] # !! delete later
-            if new_smile is None:
-                new_mols.append((new_smile, old_smile, None))
-            else:
-                new_mols.append((new_smile, old_smile, get_fp(new_smile)))
+        for sidechains_list in sidechains_lists:
+            sidechains_list = self.tokenizer.decode_batch(sidechains_list, skip_special_tokens=True)
+            for core, chains, old_smile, task in zip(data.core_smiles, sidechains_list, data.smiles, data.task):
+                new_smile = reconstruct_from_core_and_chains(core, chains)
+                if new_smile is None:
+                    new_mols.append((task, new_smile, old_smile, None))
+                else:
+                    new_mols.append((task, new_smile, old_smile, get_fp(new_smile)))
         return new_mols
 
 
@@ -89,8 +95,16 @@ class CfomDockLightning(pl.LightningModule):
         if not self.validation_clfs:
             return
         gen_res = self.generate_samples(graph)
-        for (new_sm, old_sm, new_fp), task_name in zip(gen_res, graph.task):
-            self.validation_step_outputs[task_name][old_sm].append((new_sm, new_fp))
+        for (task_name, new_sm, old_sm, new_fp) in gen_res:
+            self.eval_step_outputs[task_name][old_sm].append((new_sm, new_fp))
+
+    def test_step(self, graph, batch_idx):
+        if not self.test_clfs:
+            return
+        gen_res = self.generate_samples(graph)
+        for (task_name, new_sm, old_sm, new_fp) in gen_res:
+            self.eval_step_outputs[task_name][old_sm].append((new_sm, new_fp))
+        
 
     def evaluate_single_task(
         self, task_name, opt_molecules, clf, threshold, similarity_threshold
@@ -142,9 +156,39 @@ class CfomDockLightning(pl.LightningModule):
             std_success,
         )
 
+    def on_test_epoch_end(self):
+        results = defaultdict(list)
+        for task_name in sorted(self.eval_step_outputs.keys()):
+            opt_molecules = self.eval_step_outputs[task_name]
+            (
+                validity,
+                avg_diversity,
+                std_diversity,
+                avg_similarity,
+                std_similarity,
+                avg_success,
+                std_success,
+            ) = self.evaluate_single_task(
+                task_name,
+                opt_molecules,
+                self.test_clfs[task_name][0],
+                self.test_clfs[task_name][1],
+                self.similarity_threshold,
+            )
+            results['task'].append(task_name)
+            results['validity'].append(validity)
+            results['diversity'].append(avg_diversity)
+            results['std_diversity'].append(std_diversity)
+            results['similarity'].append(avg_similarity)
+            results['std_similarity'].append(std_similarity)
+            results['success'].append(avg_success)
+            results['std_success'].append(std_success)
+        pd.DataFrame(results).to_csv(self.test_result_path)
+        self._reset_eval_step_outputs()
+
     def on_validation_epoch_end(self):
         tot_avg_success = []
-        for task_name, opt_molecules in self.validation_step_outputs.items():
+        for task_name, opt_molecules in self.eval_step_outputs.items():
             (
                 validity,
                 avg_diversity,
@@ -169,7 +213,7 @@ class CfomDockLightning(pl.LightningModule):
             self.log(f"{task_name}_std_success", std_success, sync_dist=True)
             tot_avg_success.append(avg_success)
         self.log("validation_avg_success", sum(tot_avg_success) / len(tot_avg_success), sync_dist=True)
-        self._reset_validation_step_outputs()
+        self._reset_eval_step_outputs()
 
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
