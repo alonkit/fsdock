@@ -9,6 +9,7 @@ from datasets.process_chem.process_sidechains import (
     add_attachment_points,
     get_core_and_chains,
     get_fp,
+    get_holes,
     get_mask_of_sidechains,
     get_mol_smiles,
 )
@@ -129,8 +130,8 @@ class FsDockClfDataset(FsDockDataset):
                 sidechains_smiles = ''
             else:
                 sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
-            set_hole_ids(ligand, core)
-            
+            hole_features = get_holes(ligand)
+            extra_atom_feats = {'__holeIdx': hole_features}
             return (
                 task_name,
                 idx,
@@ -142,6 +143,7 @@ class FsDockClfDataset(FsDockDataset):
                     sidechains,
                     sidechains_smiles,
                     sidechains_mask,
+                    extra_atom_feats
                 ),
             )
         except Exception as e:

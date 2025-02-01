@@ -249,6 +249,7 @@ class FsDockDataset(Dataset):
                 return task_name, idx, None
             sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
             hole_features = get_holes(ligand)
+            extra_atom_feats = {'__holeIdx': hole_features}
             return (
                 task_name,
                 idx,
@@ -260,7 +261,7 @@ class FsDockDataset(Dataset):
                     sidechains,
                     sidechains_smiles,
                     sidechains_mask,
-                    hole_features,
+                    extra_atom_feats
                 ),
             )
         except Exception as e:
@@ -418,10 +419,10 @@ class FsDockDataset(Dataset):
                 sidechains,
                 sidechains_smiles,
                 sidechains_mask,
-                hole_features
+                extra_feats
             ) = ligand_data
             ligand_graph = HeteroData()
-            get_lig_graph(ligand, ligand_graph, self.ligand_radius)
+            get_lig_graph(ligand, ligand_graph, self.ligand_radius, extra_feats)
             ligand_graph.smiles = smiles
             ligand_graph.core_smiles = core_smiles
             ligand_graph.sidechains_smiles = sidechains_smiles

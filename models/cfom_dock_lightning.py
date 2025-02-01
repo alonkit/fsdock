@@ -31,7 +31,8 @@ class CfomDockLightning(pl.LightningModule):
         validation_clfs=None,
         test_clfs=None,
         similarity_threshold=0.4,
-        gen_meta_params=None
+        gen_meta_params=None,
+        name=None
     ):
         super().__init__()
         self.cfom_dock_model = cfom_dock_model
@@ -50,7 +51,8 @@ class CfomDockLightning(pl.LightningModule):
         self.save_hyperparameters(
             ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs"]
         )
-        self.test_result_path = f'test_stats/{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}.csv'
+        self.name = name or f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
+        self.test_result_path = f'test_stats/{self.name}.csv'
 
 
     def _reset_eval_step_outputs(self):

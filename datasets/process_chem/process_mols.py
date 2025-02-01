@@ -34,7 +34,7 @@ def lig_atom_featurizer(mol,extra_props={}):
             chiral_tag = 'CHI_OTHER'
 
         atom_features_list.append([
-            allowable_features['possible_hole_ids'], extra_props.get('hole_ids', ),
+            safe_index(allowable_features['possible_hole_ids'], extra_props['__holeIdx'][idx]),
             safe_index(allowable_features['possible_atomic_num_list'], atom.GetAtomicNum()),
             allowable_features['possible_chirality_list'].index(str(chiral_tag)),
             safe_index(allowable_features['possible_degree_list'], atom.GetTotalDegree()),
@@ -52,7 +52,6 @@ def lig_atom_featurizer(mol,extra_props={}):
             allowable_features['possible_is_in_ring7_list'].index(ringinfo.IsAtomInRingOfSize(idx, 7)),
             allowable_features['possible_is_in_ring8_list'].index(ringinfo.IsAtomInRingOfSize(idx, 8)),
             #g_charge if not np.isnan(g_charge) and not np.isinf(g_charge) else 0.
-            safe_index(allowable_features['possible_atomic_num_list'], atom.GetAtomicNum()),
         ])
     return torch.tensor(atom_features_list)
 
@@ -374,7 +373,7 @@ def hide_sidechains(graph:HeteroData, show_idx=0):
     graph['ligand','receptor'].edge_index = lig_rec
     return graph
 
-def get_lig_graph(mol, complex_graph, lig_max_radius=None, extra_atom_feats=None):
+def get_lig_graph(mol, complex_graph, lig_max_radius=None, extra_atom_feats={}):
     atom_feats = lig_atom_featurizer(mol, extra_atom_feats)
 
     row, col, edge_type = [], [], []

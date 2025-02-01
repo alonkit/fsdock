@@ -71,10 +71,10 @@ def get_core_and_chains(m1):
     if clean_core is None:
         return None, None, None, None
     core = Chem.ReplaceSidechains(m1, clean_core)
-    set_hole_ids(m1, core)
     sidechains = Chem.ReplaceCore(m1, clean_core)
     if core is None or sidechains is None:
         return None, None, None, None
+    set_hole_ids(m1, core)
     core_smiles = Chem.MolToSmiles(core)
     sidechains_smiles = Chem.MolToSmiles(sidechains)
     if core_smiles == '' or sidechains_smiles == '':

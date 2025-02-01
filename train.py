@@ -85,7 +85,7 @@ def test_model():
     model = get_model(tokenizer)
 
 
-    dst = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
+    dst = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
     dlt = DataLoader(dst, batch_size=64, 
                          num_workers=torch.get_num_threads()//2, 
                         worker_init_fn=worker_init_fn)
@@ -98,32 +98,34 @@ def test_model():
         strategy='ddp_find_unused_parameters_true')
     trainer.test(lit_model, dlt, ckpt_path="checkpoints/cfom-dock-epoch=79-validation_loss=0.00000.ckpt")
 
-def train_model():
-    wandb_logger = WandbLogger(project="CfomDockLightning", offline=False)
+def train_model(smol=False):
+    wandb_logger = WandbLogger(project="CfomDockLightning", offline=smol)
 
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
     model = get_model(tokenizer)
 
-    checkpoint_callback = ModelCheckpoint(
-        save_top_k=10,
-        monitor="validation_avg_success",
-        mode="max",
-        dirpath="checkpoints/",
-        filename="cfom-dock-{epoch:02d}-{validation_avg_success:.5f}",
-    )
-
-    # dst = FsDockDataset("data/fsdock/valid", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
-    dst = FsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
-    dlt = DataLoader(dst, batch_size=64, shuffle=True, num_workers=torch.get_num_threads(), 
+    
+    if smol:
+        dst = FsDockDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, num_workers=torch.get_num_threads())
+    else:
+        dst = FsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
+    dlt = DataLoader(dst, batch_size=32, shuffle=True, num_workers=torch.get_num_threads(), 
                     worker_init_fn=worker_init_fn)
 
-    dsv = FsDockClfDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, only_inactive=True)
-    dlv = DataLoader(dsv, batch_size=64, 
+    dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, only_inactive=True)
+    dlv = DataLoader(dsv, batch_size=32, 
                          num_workers=torch.get_num_threads()//2, 
                         worker_init_fn=worker_init_fn)
     
     
     lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, validation_clfs=dsv.clfs)
+    checkpoint_callback = ModelCheckpoint(
+        save_top_k=10,
+        monitor="validation_avg_success",
+        mode="max",
+        dirpath="checkpoints/",
+        filename= lit_model.name +"-{epoch:02d}-{validation_avg_success:.5f}",
+    )
     trainer = pl.Trainer(
         max_epochs=100, 
         callbacks=[checkpoint_callback], 
@@ -141,6 +143,6 @@ def train_model():
     
 
 if __name__ == "__main__":
-    # train_model()
-    test_model()
+    train_model(smol=True)
+    # test_model()
     
