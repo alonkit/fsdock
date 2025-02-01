@@ -125,7 +125,14 @@ def train_model():
         strategy='ddp_find_unused_parameters_true',
         logger=wandb_logger)
     trainer.fit(lit_model, dlt, dlv)
+    
+    dstest = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
+    dltest = DataLoader(dstest, batch_size=64, 
+                         num_workers=torch.get_num_threads()//2, 
+                        worker_init_fn=worker_init_fn)
+    trainer.test(lit_model, dltest, ckpt_path="best")
 
+    
 
 if __name__ == "__main__":
     # train_model()
