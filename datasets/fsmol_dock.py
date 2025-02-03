@@ -233,12 +233,15 @@ class FsDockDataset(Dataset):
 
     @staticmethod
     def process_ligand(args):
+        res = {}
         try:
             task_name, idx, ligand_path = args
             ligand = read_molecule(ligand_path, sanitize=True)
             if ligand is None:
-                return task_name, idx, None
+                return task_name, idx, res
             smiles = get_mol_smiles(ligand)
+            res['ligand']=ligand
+            res['smiles']=smiles
             core, core_smiles, sidechains, sidechains_smiles = get_core_and_chains(
                 ligand
             )
@@ -246,30 +249,28 @@ class FsDockDataset(Dataset):
                 get_logger().warning(
                     f"couldnt extract core: {task_name}, {idx}, {Chem.MolToSmiles(ligand)}"
                 )
-                return task_name, idx, None
+                return task_name, idx, res
+            res['core']=core
+            res['core_smiles']=core_smiles
+            res['sidechains']=sidechains
+            res['sidechains_smiles']=sidechains_smiles
+            
             sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
             hole_features = get_holes(ligand)
             extra_atom_feats = {'__holeIdx': hole_features}
+            res['sidechains_mask']=sidechains_mask
+            res['extra_atom_feats']=extra_atom_feats
             return (
                 task_name,
                 idx,
-                (
-                    ligand,
-                    smiles,
-                    core,
-                    core_smiles,
-                    sidechains,
-                    sidechains_smiles,
-                    sidechains_mask,
-                    extra_atom_feats
-                ),
+                res
             )
         except Exception as e:
             get_logger().error(
                 f"Error processing ligand {task_name}, {idx}, {Chem.MolToSmiles(ligand)}"
             )
             get_logger().error(traceback.format_exc())
-            return task_name, idx, None
+            return task_name, idx, res
 
     def process_sub_proteins(self):
         path = osp.join(self.processed_dir, self.saved_ligand_sub_protein_file)
@@ -409,24 +410,14 @@ class FsDockDataset(Dataset):
             "labels": [],
         }
         for (idx, row), ligand_data in zip(grouped_rows.iterrows(), ligands):
-            if ligand_data is None:
+            if ligand_data.get('sidechains_mask') is None:
                 continue
-            (
-                ligand,
-                smiles,
-                core,
-                core_smiles,
-                sidechains,
-                sidechains_smiles,
-                sidechains_mask,
-                extra_feats
-            ) = ligand_data
             ligand_graph = HeteroData()
-            get_lig_graph(ligand, ligand_graph, self.ligand_radius, extra_feats)
-            ligand_graph.smiles = smiles
-            ligand_graph.core_smiles = core_smiles
-            ligand_graph.sidechains_smiles = sidechains_smiles
-            ligand_graph.sidechains_mask = sidechains_mask
+            get_lig_graph(ligand_data['ligand'], ligand_graph, self.ligand_radius, ligand_data['extra_atom_feats'])
+            ligand_graph.smiles = ligand_data['smiles']
+            ligand_graph.core_smiles = ligand_data['core_smiles']
+            ligand_graph.sidechains_smiles = ligand_data['sidechains_smiles']
+            ligand_graph.sidechains_mask = ligand_data['sidechains_mask']
             ligand_graph.activity_type = row["type"]
             ligand_graph.label = row["label"]
             task["activity_type"] = row["type"]

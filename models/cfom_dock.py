@@ -31,18 +31,25 @@ class CfomDock(nn.Module):
             memory_key_padding_mask=memory_key_padding_mask,
         )
         return output
-
-    def _create_memory(
-        self,
-        smiles_tokens_src,
-        graph_data,
-        interaction_data,
-        molecule_sidechain_mask_idx=1,
-    ):
+    
+    def _create_text_memory(self, smiles_tokens_src):
+        if self.text_encoder is None:
+            return None, None
         smiles_padding_mask = self.text_encoder.create_src_key_padding_mask(
             smiles_tokens_src
         )
         smiles_memory = self.text_encoder(smiles_tokens_src, smiles_padding_mask)
+        if (
+            smiles_memory.shape[1] == smiles_padding_mask.shape[-1]
+        ):  # transformer encoder did not take the fast path
+            smiles_memory = smiles_memory[:, ~smiles_padding_mask.all(0)]
+
+        smiles_padding_mask = smiles_padding_mask[:, ~smiles_padding_mask.all(0)]
+        return smiles_memory, smiles_padding_mask
+
+    def _create_graph_memory(self, graph_data, molecule_sidechain_mask_idx):
+        if self.graph_encoder is None:
+            return None, None
         graph_data = self.graph_encoder.mask_graph_sidechains(
             graph_data, molecule_sidechain_mask_idx
         )
@@ -51,28 +58,46 @@ class CfomDock(nn.Module):
         graph_padding_mask = self.graph_encoder.create_memory_key_padding_mask(
             graph_data
         )
+        graph_memory = graph_memory[:, ~graph_padding_mask.all(0)]
+        graph_padding_mask = graph_padding_mask[:, ~graph_padding_mask.all(0)]
+        return graph_memory, graph_padding_mask
+    
+    def _create_interaction_memory(self, interaction_data):
+        if self.interaction_encoder is None:
+            return None, None
         interaction_memory = self.interaction_encoder(*interaction_data).unsqueeze(1)
         interaction_padding_mask = (
             torch.zeros(*interaction_memory.shape[0:2])
             .bool()
             .to(interaction_memory.device)
         )
+        return interaction_memory, interaction_padding_mask
+    
+    def remove_nones(self, l):
+        return [x for x in l if x is not None]
+    
+    def _create_memory(
+        self,
+        smiles_tokens_src,
+        graph_data,
+        interaction_data,
+        molecule_sidechain_mask_idx=1,
+    ):
 
-        if (
-            smiles_memory.shape[1] == smiles_padding_mask.shape[-1]
-        ):  # transformer encoder did not take the fast path
-            smiles_memory = smiles_memory[:, ~smiles_padding_mask.all(0)]
-
-        smiles_padding_mask = smiles_padding_mask[:, ~smiles_padding_mask.all(0)]
-        graph_memory = graph_memory[:, ~graph_padding_mask.all(0)]
-        graph_padding_mask = graph_padding_mask[:, ~graph_padding_mask.all(0)]
-
+        smiles_memory, smiles_padding_mask = self._create_text_memory(smiles_tokens_src)
+        graph_memory, graph_padding_mask = self._create_graph_memory(
+            graph_data, molecule_sidechain_mask_idx
+        )
+        interaction_memory, interaction_padding_mask = self._create_interaction_memory(
+            interaction_data
+        )
+        
         # Concatenate encoder output with GNN output
         combined_memory = torch.cat(
-            (smiles_memory, graph_memory, interaction_memory), dim=1
+            self.remove_nones([smiles_memory, graph_memory, interaction_memory]), dim=1
         )
         memory_padding_mask = torch.cat(
-            (smiles_padding_mask, graph_padding_mask, interaction_padding_mask), dim=1
+            self.remove_nones([smiles_padding_mask, graph_padding_mask, interaction_padding_mask]), dim=1
         )
         return combined_memory, memory_padding_mask
 

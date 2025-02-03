@@ -51,9 +51,13 @@ def worker_init_fn(worker_id):
 # for t in tqdm(dlv):
 #     pass     
 # exit()
-ds = FsDockDataset('data/fsdock/train','../docking_cfom/train_tasks.csv', num_workers=torch.get_num_threads())
-ds = FsDockClfDataset('data/fsdock/clfs/test','../docking_cfom/test_tasks.csv', num_workers=torch.get_num_threads())
-ds = FsDockClfDataset('data/fsdock/clfs/valid','../docking_cfom/valid_tasks.csv', num_workers=torch.get_num_threads())
+ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
+exit()
+
+
+ds = FsDockDataset('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads())
+ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
+ds = FsDockClfDataset('data/fsdock/clfs/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads())
 
 
 

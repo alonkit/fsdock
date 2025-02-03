@@ -1,3 +1,4 @@
+import random
 import traceback
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -97,7 +98,7 @@ class FsDockClfDataset(FsDockDataset):
             if len(self.ligands[task]) < self.min_clf_samples:
                 continue
             labels = self.tasks[task]["labels"]
-            mols = [l[0] for l in self.ligands[task] if l is not None]
+            mols = [d['ligand'] for d in self.ligands[task] if d.get('ligand') is not None]
             clf, roc_auc, best_thresh = self.get_clf(mols, labels)
             if roc_auc < self.min_roc_auc:
                 self.logger.info(
@@ -111,12 +112,15 @@ class FsDockClfDataset(FsDockDataset):
 
     @staticmethod
     def process_ligand(args):
+        res = {}
         try:
             task_name, idx, ligand_path = args
             ligand = read_molecule(ligand_path, sanitize=True)
             if ligand is None:
-                return task_name, idx, None
+                return task_name, idx, res
             smiles = get_mol_smiles(ligand)
+            res['ligand']=ligand
+            res['smiles']=smiles
             core, core_smiles, sidechains, sidechains_smiles = get_core_and_chains(
                 ligand
             )
@@ -130,32 +134,29 @@ class FsDockClfDataset(FsDockDataset):
                 sidechains_smiles = ''
             else:
                 sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
+            res['core']=core
+            res['core_smiles']=core_smiles
+            res['sidechains']=sidechains
+            res['sidechains_smiles']=sidechains_smiles
+
             hole_features = get_holes(ligand)
             extra_atom_feats = {'__holeIdx': hole_features}
-            return (
-                task_name,
-                idx,
-                (
-                    ligand,
-                    smiles,
-                    core,
-                    core_smiles,
-                    sidechains,
-                    sidechains_smiles,
-                    sidechains_mask,
-                    extra_atom_feats
-                ),
-            )
+
+            res['sidechains_mask']=sidechains_mask
+            res['extra_atom_feats']=extra_atom_feats
+            return task_name, idx, res
         except Exception as e:
             get_logger().error(
                 f"Error processing ligand {task_name}, {idx}, {Chem.MolToSmiles(ligand)}"
             )
             get_logger().error(traceback.format_exc())
-            return task_name, idx, None
+            return task_name, idx, res
 
     def get_clf(self, mols, labels):
         positive_fp = [get_fp(mol) for l, mol in zip(labels, mols) if l == 1]
         negative_fp = [get_fp(mol) for l, mol in zip(labels, mols) if l == 0]
+        random.shuffle(positive_fp)
+        random.shuffle(negative_fp)
         pos_ratio = len(positive_fp) / (len(negative_fp) + len(positive_fp))
         num_test = int(self.test_fraction * (len(negative_fp) + len(positive_fp)))
         pos_test_fp = positive_fp[: int(pos_ratio * num_test)]

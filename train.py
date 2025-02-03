@@ -40,15 +40,9 @@ def get_model(tokenizer):
         lm_embedding_dim=1280,
     )
     graph_encoder = GraphEncoder(
-<<<<<<< HEAD
         in_channels=32,
         edge_channels=32,
         hidden_channels=[64,128, 256],
-=======
-        in_channels=16,
-        edge_channels=16,
-        hidden_channels=[32,64,128],
->>>>>>> working on holes, too drunk
         out_channels=128,
         attention_groups=8,
         graph_embedder=graph_embedder,
@@ -85,18 +79,18 @@ def test_model():
     model = get_model(tokenizer)
 
 
-    dst = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
-    dlt = DataLoader(dst, batch_size=64, 
+    dstest = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.75)
+    dltest = DataLoader(dstest, batch_size=64, 
                          num_workers=torch.get_num_threads()//2, 
                         worker_init_fn=worker_init_fn)
     
     
-    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, test_clfs=dst.clfs)
+    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, test_clfs=dstest.clfs)
     trainer = pl.Trainer(
         max_epochs=100, 
         check_val_every_n_epoch=10,
         strategy='ddp_find_unused_parameters_true')
-    trainer.test(lit_model, dlt, ckpt_path="checkpoints/cfom-dock-epoch=79-validation_loss=0.00000.ckpt")
+    trainer.test(lit_model, dltest, ckpt_path="checkpoints/2025-02-01-16_40_38-epoch=89-validation_avg_success=0.26108.ckpt")
 
 def train_model(smol=False):
     wandb_logger = WandbLogger(project="CfomDockLightning", offline=smol)
@@ -109,7 +103,7 @@ def train_model(smol=False):
         dst = FsDockDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, num_workers=torch.get_num_threads())
     else:
         dst = FsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
-    dlt = DataLoader(dst, batch_size=32, shuffle=True, num_workers=torch.get_num_threads(), 
+    dlt = DataLoader(dst, batch_size=2 if smol else 32 , shuffle=True, num_workers=torch.get_num_threads(), 
                     worker_init_fn=worker_init_fn)
 
     dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, only_inactive=True)
@@ -143,6 +137,6 @@ def train_model(smol=False):
     
 
 if __name__ == "__main__":
-    train_model(smol=True)
-    # test_model()
+    # train_model(smol=True)
+    test_model()
     

@@ -52,7 +52,7 @@ class CfomDockLightning(pl.LightningModule):
             ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs"]
         )
         self.name = name or f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
-        self.test_result_path = f'test_stats/{self.name}.csv'
+        self.test_result_path = f'test_stats/{self.name}'
 
 
     def _reset_eval_step_outputs(self):
@@ -103,6 +103,7 @@ class CfomDockLightning(pl.LightningModule):
     def test_step(self, graph, batch_idx):
         if not self.test_clfs:
             return
+        
         gen_res = self.generate_samples(graph)
         for (task_name, new_sm, old_sm, new_fp) in gen_res:
             self.eval_step_outputs[task_name][old_sm].append((new_sm, new_fp))
@@ -158,7 +159,7 @@ class CfomDockLightning(pl.LightningModule):
             std_success,
         )
 
-    def on_test_epoch_end(self):
+    def on_test_end(self):
         results = defaultdict(list)
         for task_name in sorted(self.eval_step_outputs.keys()):
             opt_molecules = self.eval_step_outputs[task_name]
@@ -185,7 +186,8 @@ class CfomDockLightning(pl.LightningModule):
             results['std_similarity'].append(std_similarity)
             results['success'].append(avg_success)
             results['std_success'].append(std_success)
-        pd.DataFrame(results).to_csv(self.test_result_path)
+            results['total'].append(sum(map(len, opt_molecules.values())))
+        pd.DataFrame(results).to_csv(f'{self.test_result_path}.csv')
         self._reset_eval_step_outputs()
 
     def on_validation_epoch_end(self):

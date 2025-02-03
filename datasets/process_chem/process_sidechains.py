@@ -74,11 +74,11 @@ def get_core_and_chains(m1):
     sidechains = Chem.ReplaceCore(m1, clean_core)
     if core is None or sidechains is None:
         return None, None, None, None
-    set_hole_ids(m1, core)
     core_smiles = Chem.MolToSmiles(core)
     sidechains_smiles = Chem.MolToSmiles(sidechains)
     if core_smiles == '' or sidechains_smiles == '':
         return None, None, None, None
+    set_hole_ids(m1, core)
     return clean_core, core_smiles, sidechains ,sidechains_smiles
 
 def get_mask_of_sidechains(full_mol,sidechains):
@@ -101,13 +101,6 @@ def get_holes(mol):
         if atom.HasProp("__holeIdx"):
             hole_lst[i] = atom.GetIntProp("__holeIdx")
     return hole_lst
-
-if __name__ == '__main__':
-    ligand = Chem.MolFromSmiles("O=c1c2ccccc2nc2n1CCCS2")
-    core, core_smiles, sidechains ,sidechains_smiles = get_core_and_chains(ligand)
-    core_indices = get_mask_of_sidechains(ligand,core)
-    sidechain_indices = get_mask_of_sidechains(ligand,sidechains)
-
 
 def smiles_valid(smiles,verbose=False):
     if smiles is None:
@@ -203,10 +196,11 @@ def add_attachment_points(mol, n, seed=None, fg_weight=0, fg_list=[]):
                            [x[0] for x in fg_list] + ["[c,C][H]"],
                            [x[1] for x in fg_list] + ["C*"]))
 
-    current_mol = Chem.AddHs(mol)
-    current_mol.UpdatePropertyCache()
     current_attachment_index = 1
+    current_mol = mol
     for i in range(n):
+        current_mol = Chem.AddHs(current_mol)
+        current_mol.UpdatePropertyCache()
         next_mol = []
         max_tries = 100
         current_try = 0
@@ -222,10 +216,31 @@ def add_attachment_points(mol, n, seed=None, fg_weight=0, fg_list=[]):
             continue  # skip and try again (we will return less than n attachment points)
         current_attachment_index += 1
         current_mol = random.choice(next_mol)
+        current_mol = Chem.RemoveHs(current_mol)
         current_mol.UpdatePropertyCache()
 
-    current_mol = Chem.RemoveHs(current_mol)
-    current_mol.UpdatePropertyCache()
+        # a little stupid but i need to find after every iteration 
+        # what is the new atom that was added to mark him with the old idx
+        new_atom = None
+        idxs = set(range(mol.GetNumAtoms()))
+        for atom in current_mol.GetAtoms():
+            if atom.GetSymbol() == "*":
+                continue
+            if atom.HasProp("__origIdx"):
+                idxs.remove(atom.GetIntProp("__origIdx"))
+            else:
+                new_atom = atom
+        new_atom.SetIntProp("__origIdx", idxs.pop())
+
     set_hole_ids(mol, current_mol)
     current_smiles = Chem.MolToSmiles(current_mol)
     return current_smiles
+
+
+if __name__ == '__main__':
+    ligand = Chem.MolFromSmiles("O=c1c2ccccc2nc2n1CCCS2")
+    core, core_smiles, sidechains ,sidechains_smiles = get_core_and_chains(ligand)
+    # core_indices = get_mask_of_sidechains(ligand,core)
+    # sidechain_indices = get_mask_of_sidechains(ligand,sidechains)
+    print(add_attachment_points(ligand, 2))
+    print(get_holes(ligand))
