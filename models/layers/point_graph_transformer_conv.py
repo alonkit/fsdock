@@ -64,15 +64,17 @@ class PGHTConv(MessagePassing):
         in_channels: Union[int, Dict[str, int]],
         edge_in_channels: Union[int, Dict[str, int]],
         out_channels: int,
-        metadata: Metadata,
+        metadata: Metadata = None,
         group: str = "sum",
         num_attn_groups: int = 2,
         dropout = 0.1,
+        simplify: bool = True,
         **kwargs,
     ):
         super().__init__(aggr='add', node_dim=0, **kwargs)
 
         assert out_channels % num_attn_groups == 0 , 'out_channels must be divisible by num_attn_groups'
+        self._is_simplify = simplify
 
         if not isinstance(in_channels, dict):
             in_channels = {node_type: in_channels for node_type in metadata[0]}
@@ -120,7 +122,35 @@ class PGHTConv(MessagePassing):
             self.attn_nn[edge_type] = nn.Sequential(nn.Linear(out_channels, num_attn_groups),nn.BatchNorm1d(num_attn_groups), nn.ReLU(),nn.Linear(num_attn_groups, num_attn_groups))
         self.reset_parameters()
         self.attn_drop = nn.Dropout(dropout)
+        if self._is_simplify:
+            params_before = len(list(self.parameters()))
+            self._simplify()
+            params_after = len(list(self.parameters()))
+            print(f'Simplifying: {params_before} -> {params_after}')
 
+    def _simplify(self):
+        params_dicts = [
+            self.k_lin,
+            self.q_lin,
+            self.v_lin,
+            self.out_lin,
+            self.skip,
+            self.norm_input, 
+            self.norm_output,
+            self.edge_lin,
+            self.attn_nn,
+            self.norm_messages
+        ]
+        if len(self.identity_lin) > 0:
+            params_dicts.append(self.identity_lin)
+        for param_dict in params_dicts:
+            first_param = None
+            for k, param in param_dict.items():
+                if first_param is None:
+                    first_param = param
+                param_dict[k] = first_param
+        
+            
     # nn.Sequential(nn.Linear(cross_distance_embed_dim, emb_dim), nn.ReLU(), nn.Dropout(dropout),nn.Linear(emb_dim, emb_dim))
     def reset_parameters(self):
         reset(self.k_lin)
@@ -159,7 +189,7 @@ class PGHTConv(MessagePassing):
         """
 
         k_dict, q_dict, v_dict, out_dict = {}, {}, {}, {}
-
+        self.parameters()
         # Iterate over node-types:
         for node_type, x in x_dict.items():
             if node_type not in self.in_channels:
@@ -177,9 +207,9 @@ class PGHTConv(MessagePassing):
                 continue
             s_edge_type = '__'.join(edge_type)
 
-            e = edge_attr_dict[edge_type]
-            if self.edge_lin is not None:
-                e = self.edge_lin[s_edge_type](e)
+            e = None  # edge_attr_dict[edge_type]
+            # if self.edge_lin is not None:
+            #     e = self.edge_lin[s_edge_type](e)
 
             k = k_dict[src_type]
 
@@ -211,8 +241,8 @@ class PGHTConv(MessagePassing):
             identity = x_dict[node_type]
             if out.size(-1) != identity.size(-1):
                 identity = self.identity_lin[node_type](identity)
-            alpha = self.skip[node_type].sigmoid()
-            out = alpha * out + (1 - alpha) * identity
+            # alpha = self.skip[node_type].sigmoid()
+            out = out + identity
             out_dict[node_type] = out
 
         return out_dict
@@ -223,11 +253,11 @@ class PGHTConv(MessagePassing):
                 size_i: Optional[int]) -> Tensor:
         delta_mul = self.coords_mul_nn(coords_i - coords_j)
         delta_bias = self.coords_bias_nn(coords_i - coords_j)
-        alpha = (q_i - k_j - e)* delta_mul + delta_bias 
+        alpha = (q_i - k_j)* delta_mul + delta_bias 
         alpha = attn_nn(alpha)
         alpha = self.attn_drop(alpha)
         alpha = softmax(alpha, index, ptr, size_i)
-        out = (v_j + delta_bias + e).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * alpha.unsqueeze(-1)
+        out = (v_j + delta_bias).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * alpha.unsqueeze(-1)
         return out.view(-1, self.out_channels)
 
     def __repr__(self) -> str:
