@@ -63,7 +63,8 @@ class CfomDockLightning(pl.LightningModule):
             data.core_tokens,
             data.sidechain_tokens[:, :-1],
             data,
-            (data.activity_type, data.label),
+            (data.activity_type, data.label), 
+            molecule_sidechain_mask_idx=1
         )
         logits = logits.reshape(-1, logits.shape[-1])
         tgt = data.sidechain_tokens[:, 1:].reshape(-1)

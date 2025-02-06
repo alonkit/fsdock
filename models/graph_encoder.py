@@ -57,14 +57,16 @@ class GraphEncoder(torch.nn.Module):
         }
         return graph.subgraph(masks)
 
-    def forward(self, data: HeteroData):
-        data = self.graph_embedder(data)
-        data = ToUndirected()(data)
-        node_attr_dict = data.x_dict
+    def forward(self, hdata: HeteroData):
+        hdata = self.graph_embedder(hdata)
+        hdata = ToUndirected()(hdata)
+        data = hdata.to_homogeneous()
+        x = data.x
         for conv in self.convs:
-            node_attr_dict = conv(node_attr_dict, data.edge_index_dict, data.edge_attr_dict, data.pos_dict)
-        output = node_attr_dict['ligand']
-        batch_indices = data['ligand'].batch
+            x = conv(x, data.edge_index, data.edge_attr, data.pos)
+        ligand_idx = hdata.node_types.index('ligand')
+        output = x[data.node_type == ligand_idx]
+        batch_indices = data.batch[data.node_type == ligand_idx]
         batch_size = batch_indices.max().item() + 1
         emb_dim = output.size(1)
 

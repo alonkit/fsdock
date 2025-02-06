@@ -75,7 +75,7 @@ class PGHTConv(MessagePassing):
 
         assert out_channels % num_attn_groups == 0 , 'out_channels must be divisible by num_attn_groups'
         self._is_simplify = simplify
-
+        metadata = [('node',),(('node', 'edge', 'node'),)] 
         if not isinstance(in_channels, dict):
             in_channels = {node_type: in_channels for node_type in metadata[0]}
 
@@ -98,8 +98,8 @@ class PGHTConv(MessagePassing):
         for node_type, in_channels in self.in_channels.items():
             self.norm_input[node_type] = nn.BatchNorm1d(in_channels)
             self.norm_output[node_type] = nn.BatchNorm1d(out_channels)
-            self.k_lin[node_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU())
-            self.q_lin[node_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU())
+            self.k_lin[node_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
+            self.q_lin[node_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
             self.v_lin[node_type] = Linear(in_channels, out_channels)
             self.out_lin[node_type] = Linear(out_channels, out_channels)
             self.skip[node_type] = Parameter(torch.Tensor(1))
@@ -165,13 +165,11 @@ class PGHTConv(MessagePassing):
 
     def forward(
         self,
-        x_dict: Dict[NodeType, Tensor],
-        edge_index_dict: Union[Dict[EdgeType, Tensor],
-                               Dict[EdgeType, SparseTensor]]  # Support both.
-        ,
-        edge_attr_dict: Dict[EdgeType, Tensor],
-        coords_dict: Dict[EdgeType, Tensor],
-    ) -> Dict[NodeType, Optional[Tensor]]:
+        x: Tensor,
+        edge_index: Union[Tensor,SparseTensor],
+        edge_attr: Tensor,
+        coords: Tensor,
+    ) -> Tensor:
         r"""
         Args:
             x_dict (Dict[str, Tensor]): A dictionary holding input node
@@ -188,73 +186,39 @@ class PGHTConv(MessagePassing):
             be set to :obj:`None`.
         """
 
-        k_dict, q_dict, v_dict, out_dict = {}, {}, {}, {}
-        self.parameters()
-        # Iterate over node-types:
-        for node_type, x in x_dict.items():
-            if node_type not in self.in_channels:
-                continue
-            x = self.norm_input[node_type](x)
-            k_dict[node_type] = self.k_lin[node_type](x)
-            q_dict[node_type] = self.q_lin[node_type](x)
-            v_dict[node_type] = self.v_lin[node_type](x)
-            out_dict[node_type] = []
-
-        # Iterate over edge-types:
-        for edge_type, edge_index in edge_index_dict.items():
-            src_type, _, dst_type = edge_type
-            if src_type not in self.in_channels or dst_type not in self.in_channels:
-                continue
-            s_edge_type = '__'.join(edge_type)
-
-            e = None  # edge_attr_dict[edge_type]
-            # if self.edge_lin is not None:
-            #     e = self.edge_lin[s_edge_type](e)
-
-            k = k_dict[src_type]
-
-            v = v_dict[src_type]
-            coords = (coords_dict[src_type],coords_dict[dst_type])
-            # propagate_type: (k: Tensor, q: Tensor, v: Tensor, coords: Tensor, e: Tensor, attn_nn: nn.Module)
-            out = self.propagate(
+        x = self.norm_input['node'](x)
+        k = self.k_lin['node'](x)
+        q = self.q_lin['node'](x)
+        v = self.v_lin['node'](x)
+        out = self.propagate(
                 edge_index,
                 size=None,
                 k=k,
-                q=q_dict[dst_type],
+                q=q,
                 v=v,
                 coords=coords,
-                e=e,
-                attn_nn=self.attn_nn[s_edge_type],
+                e=edge_attr,
             )
-            out_dict[dst_type].append(out)
 
-        # Iterate over node-types:
-        for node_type, outs in out_dict.items():
-            out = group(outs, self.group)
 
-            if out is None:
-                out_dict[node_type] = None
-                continue
+        out = self.out_lin['node'](F.relu(out))
+        out = self.norm_output['node'](out)
+        identity = x
+        if out.size(-1) != identity.size(-1):
+            identity = self.identity_lin['node'](identity)
+        # alpha = self.skip[node_type].sigmoid()
+        out = out + identity
 
-            out = self.out_lin[node_type](F.relu(out))
-            out = self.norm_output[node_type](out)
-            identity = x_dict[node_type]
-            if out.size(-1) != identity.size(-1):
-                identity = self.identity_lin[node_type](identity)
-            # alpha = self.skip[node_type].sigmoid()
-            out = out + identity
-            out_dict[node_type] = out
-
-        return out_dict
+        return out
 
     def message(self, k_j: Tensor, q_i: Tensor, v_j: Tensor, 
-                e: Tensor, coords_i: Tensor,coords_j: Tensor,  attn_nn: nn.Module,
+                e: Tensor, coords_i: Tensor,coords_j: Tensor,
                 index: Tensor, ptr: Optional[Tensor],
                 size_i: Optional[int]) -> Tensor:
         delta_mul = self.coords_mul_nn(coords_i - coords_j)
         delta_bias = self.coords_bias_nn(coords_i - coords_j)
         alpha = (q_i - k_j)* delta_mul + delta_bias 
-        alpha = attn_nn(alpha)
+        alpha = self.attn_nn[ '__'.join(('node', 'edge', 'node'))](alpha)
         alpha = self.attn_drop(alpha)
         alpha = softmax(alpha, index, ptr, size_i)
         out = (v_j + delta_bias).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * alpha.unsqueeze(-1)
