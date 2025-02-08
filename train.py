@@ -46,7 +46,7 @@ def get_model(tokenizer):
     graph_encoder = GraphEncoder(
         in_channels=32,
         edge_channels=32,
-        hidden_channels=[64,128, 256, 256, 256, 128],
+        hidden_channels=[64,64, 64, 64, 64, 64, 64, 64, 64, 128],
         out_channels=128,
         attention_groups=8,
         graph_embedder=graph_embedder,
@@ -83,7 +83,7 @@ def test_model():
     model = get_model(tokenizer)
 
 
-    dstest = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.75)
+    dstest = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.70)
     dltest = DataLoader(dstest, batch_size=64, 
                          num_workers=torch.get_num_threads()//2, 
                         worker_init_fn=worker_init_fn)
@@ -94,8 +94,7 @@ def test_model():
         max_epochs=100, 
         check_val_every_n_epoch=10,
         strategy='ddp_find_unused_parameters_true')
-    trainer.test(lit_model, dltest, ckpt_path="checkpoints/2025-02-01-16_40_38-epoch=89-validation_avg_success=0.26108.ckpt")
-
+    trainer.test(lit_model, dltest, ckpt_path="/home/alon.kitin/fs-dock/checkpoints/2025-02-07-00_56_41/epoch=29-validation_avg_success=0.27563.ckpt")
 def train_model(smol=False):
     wandb_logger = WandbLogger(project="CfomDockLightning", offline=smol)
 
@@ -103,7 +102,7 @@ def train_model(smol=False):
     model = get_model(tokenizer)
 
     wandb_logger.watch(model, log='all')
-    if smol or True:
+    if smol:
         dst = FsDockDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, num_workers=torch.get_num_threads())
     else:
         dst = FsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
@@ -142,6 +141,6 @@ def train_model(smol=False):
     
 
 if __name__ == "__main__":
-    train_model(smol=False)
-    # test_model()
+    # train_model(smol=bool(os.environ.get("SMOL")))
+    test_model()
     

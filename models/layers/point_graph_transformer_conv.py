@@ -68,87 +68,41 @@ class PGHTConv(MessagePassing):
         group: str = "sum",
         num_attn_groups: int = 2,
         dropout = 0.1,
-        simplify: bool = True,
         **kwargs,
     ):
         super().__init__(aggr='add', node_dim=0, **kwargs)
 
         assert out_channels % num_attn_groups == 0 , 'out_channels must be divisible by num_attn_groups'
-        self._is_simplify = simplify
         metadata = [('node',),(('node', 'edge', 'node'),)] 
-        if not isinstance(in_channels, dict):
-            in_channels = {node_type: in_channels for node_type in metadata[0]}
+        # if not isinstance(in_channels, dict):
+        #     in_channels = {node_type: in_channels for node_type in metadata[0]}
 
-        if not isinstance(edge_in_channels, dict):
-            edge_in_channels = {edge_type: edge_in_channels for edge_type in metadata[1]}
+        # if not isinstance(edge_in_channels, dict):
+        #     edge_in_channels = {edge_type: edge_in_channels for edge_type in metadata[1]}
 
         self.in_channels = in_channels
         self.edge_in_channels = edge_in_channels
         self.out_channels = out_channels
         self.group = group
         self.num_attn_groups = num_attn_groups
-        self.k_lin = ModuleDict()
-        self.q_lin = ModuleDict()
-        self.v_lin = ModuleDict()
-        self.out_lin = ModuleDict()
-        self.identity_lin = ModuleDict()
-        self.skip = ParameterDict()
-        self.norm_input = ModuleDict()
-        self.norm_output = ModuleDict()
-        for node_type, in_channels in self.in_channels.items():
-            self.norm_input[node_type] = nn.BatchNorm1d(in_channels)
-            self.norm_output[node_type] = nn.BatchNorm1d(out_channels)
-            self.k_lin[node_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
-            self.q_lin[node_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
-            self.v_lin[node_type] = Linear(in_channels, out_channels)
-            self.out_lin[node_type] = Linear(out_channels, out_channels)
-            self.skip[node_type] = Parameter(torch.Tensor(1))
-            if in_channels != out_channels:
-                self.identity_lin[node_type] = Linear(in_channels, out_channels)
+        full_edge_in_ch = in_channels*2 + edge_in_channels
+        self.k_lin = nn.Sequential(nn.Linear(full_edge_in_ch, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
+        self.q_lin = nn.Sequential(nn.Linear(full_edge_in_ch, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
+        self.v_lin = Linear(full_edge_in_ch, out_channels)
+        self.out_lin = Linear(out_channels, out_channels)
+        self.identity_lin = Linear(in_channels, out_channels) if in_channels != out_channels else None
+        self.norm_input = nn.BatchNorm1d(in_channels)
+        self.norm_output = nn.BatchNorm1d(out_channels)
 
-        self.edge_lin = ModuleDict()
-        for edge_type, in_channels in self.edge_in_channels.items():
-            edge_type = '__'.join(edge_type)
-            self.edge_lin[edge_type] = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(), nn.Linear(out_channels, out_channels))
+        self.edge_lin = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(), nn.Linear(out_channels, out_channels))
 
         self.coords_bias_nn = nn.Sequential(nn.Linear(3, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(), nn.Linear(out_channels, out_channels))
         self.coords_mul_nn = nn.Sequential(nn.Linear(3, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(),nn.Linear(out_channels, out_channels))
 
-        self.attn_nn = ModuleDict()
-        self.norm_messages = ModuleDict()
-        for edge_type, in_channels in self.edge_in_channels.items():
-            edge_type = '__'.join(edge_type)
-            self.norm_messages[edge_type]= nn.BatchNorm1d(out_channels)
-            self.attn_nn[edge_type] = nn.Sequential(nn.Linear(out_channels, num_attn_groups),nn.BatchNorm1d(num_attn_groups), nn.ReLU(),nn.Linear(num_attn_groups, num_attn_groups))
+        self.attn_nn = nn.Sequential(nn.Linear(out_channels, num_attn_groups),nn.BatchNorm1d(num_attn_groups), nn.ReLU(),nn.Linear(num_attn_groups, num_attn_groups))
+        self.norm_messages = nn.BatchNorm1d(out_channels)
         self.reset_parameters()
         self.attn_drop = nn.Dropout(dropout)
-        if self._is_simplify:
-            params_before = len(list(self.parameters()))
-            self._simplify()
-            params_after = len(list(self.parameters()))
-            print(f'Simplifying: {params_before} -> {params_after}')
-
-    def _simplify(self):
-        params_dicts = [
-            self.k_lin,
-            self.q_lin,
-            self.v_lin,
-            self.out_lin,
-            self.skip,
-            self.norm_input, 
-            self.norm_output,
-            self.edge_lin,
-            self.attn_nn,
-            self.norm_messages
-        ]
-        if len(self.identity_lin) > 0:
-            params_dicts.append(self.identity_lin)
-        for param_dict in params_dicts:
-            first_param = None
-            for k, param in param_dict.items():
-                if first_param is None:
-                    first_param = param
-                param_dict[k] = first_param
         
             
     # nn.Sequential(nn.Linear(cross_distance_embed_dim, emb_dim), nn.ReLU(), nn.Dropout(dropout),nn.Linear(emb_dim, emb_dim))
@@ -161,11 +115,10 @@ class PGHTConv(MessagePassing):
         reset(self.coords_bias_nn)
         reset(self.coords_mul_nn)
         reset(self.attn_nn) if not self.attn_nn else None 
-        ones(self.skip)
 
     def forward(
         self,
-        x: Tensor,
+        node_attr: Tensor,
         edge_index: Union[Tensor,SparseTensor],
         edge_attr: Tensor,
         coords: Tensor,
@@ -186,42 +139,46 @@ class PGHTConv(MessagePassing):
             be set to :obj:`None`.
         """
 
-        x = self.norm_input['node'](x)
-        k = self.k_lin['node'](x)
-        q = self.q_lin['node'](x)
-        v = self.v_lin['node'](x)
+        node_attr = self.norm_input(node_attr)
+        # k = self.k_lin['node'](x)
+        # q = self.q_lin['node'](x)
+        # v = self.v_lin['node'](x)
+        # propagate_type: (v: Tensor, coords: Tensor, e: Tensor)
         out = self.propagate(
                 edge_index,
                 size=None,
-                k=k,
-                q=q,
-                v=v,
+                v=node_attr,
                 coords=coords,
                 e=edge_attr,
             )
 
 
-        out = self.out_lin['node'](F.relu(out))
-        out = self.norm_output['node'](out)
-        identity = x
+        out = self.out_lin(F.relu(out))
+        out = self.norm_output(out)
+        identity = node_attr
         if out.size(-1) != identity.size(-1):
-            identity = self.identity_lin['node'](identity)
+            identity = self.identity_lin(identity)
         # alpha = self.skip[node_type].sigmoid()
         out = out + identity
 
         return out
 
-    def message(self, k_j: Tensor, q_i: Tensor, v_j: Tensor, 
+    def message(self, 
+                v_i: Tensor,v_j: Tensor,
                 e: Tensor, coords_i: Tensor,coords_j: Tensor,
                 index: Tensor, ptr: Optional[Tensor],
                 size_i: Optional[int]) -> Tensor:
+        v_i_e_v_j = torch.concat([v_i, e, v_j],dim=-1) # maybe through coords here?
+        k = self.k_lin(v_i_e_v_j)
+        q = self.q_lin(v_i_e_v_j)
+        v = self.v_lin(v_i_e_v_j)
         delta_mul = self.coords_mul_nn(coords_i - coords_j)
         delta_bias = self.coords_bias_nn(coords_i - coords_j)
-        alpha = (q_i - k_j)* delta_mul + delta_bias 
-        alpha = self.attn_nn[ '__'.join(('node', 'edge', 'node'))](alpha)
+        alpha = (q - k)* delta_mul + delta_bias 
+        alpha = self.attn_nn(alpha)
         alpha = self.attn_drop(alpha)
         alpha = softmax(alpha, index, ptr, size_i)
-        out = (v_j + delta_bias).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * alpha.unsqueeze(-1)
+        out = (v + delta_bias).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * alpha.unsqueeze(-1)
         return out.view(-1, self.out_channels)
 
     def __repr__(self) -> str:

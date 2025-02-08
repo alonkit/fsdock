@@ -161,6 +161,12 @@ class CfomDockLightning(pl.LightningModule):
         )
 
     def on_test_end(self):
+        for name, opt_molecules in self.eval_step_outputs.items():
+            with open(f'{self.test_result_path}-{name}', 'w') as f:
+                for orig_mol in opt_molecules:
+                    for new_mol,_ in opt_molecules[orig_mol]:
+                        f.write(f'{orig_mol} {new_mol}\n')
+        
         results = defaultdict(list)
         for task_name in sorted(self.eval_step_outputs.keys()):
             opt_molecules = self.eval_step_outputs[task_name]

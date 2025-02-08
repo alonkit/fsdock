@@ -1,13 +1,15 @@
+import numpy as np
 import torch
 import pickle
 import zipfile
 from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
 
 class MapFileManager:
     def __init__(self, f_name, mode=None):
         self.mode = mode
         self.f_name = f_name
-        self.zipf = None
+        self.zipf : zipfile.ZipFile = None
     
     def __enter__(self):
         self.open()
@@ -35,21 +37,35 @@ class MapFileManager:
         with self.zipf.open(self._file_name(name), self.mode) as obj_f:
                 torch.save(obj, obj_f)
     
-    def saves(self, obj_dct):
-        for k, v in obj_dct.items():
-            self.save_obj(v,k)
     
     def load(self, name):
         assert 'r' in self.mode , "manager must be in load mode"
         with self.zipf.open(self._file_name(name), self.mode) as obj_f:
             return torch.load(obj_f)
-        
+    
+    def load_all(self,):
+        names = self.zipf.namelist()
+        res_dct = {}
+        for name in names:
+            res_dct[name] = self.load(name)
+    
+            
+    def __getitem__(self, key):
+        return self.load(key)
+
+    def __setitem__(self, key, value):
+        self.save(value, key)
+    
+    def __len__(self):
+        assert 'r' in self.mode , "manager must be in load mode"
+        return len(self.zipf.namelist())
+
 if __name__ == '__main__':
     with MapFileManager('objects.zip', 'w') as mf:
-        for i in tqdm(range(1000)):
-            mf.save(torch.arange(100000), f'v{i}')
+        for i in tqdm(range(10)):
+            mf[f'v{i}'] = i
         
-    with MapFileManager('objects.zip', 'r') as mf:
-        for i in tqdm(range(1000)):
-            mf.load(f'v{i}')
-        
+    # with MapFileManager('objects.zip', 'r') as mf:
+    #     for i in tqdm(range(1000)):
+    #         mf.load(f'v{i}')
+    
