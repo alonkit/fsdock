@@ -117,6 +117,27 @@ class CfomDockLightning(pl.LightningModule):
             return loss
             
             
+    def generate_samples(self, data):
+        sidechains_lists = self.cfom_dock_model.generate_samples(
+            self.num_gen_samples,
+            data.core_tokens,
+            data.core_smiles,
+            data,
+            (data.activity_type, [1] * len(data)),
+            **self.gen_meta_params
+        )
+        # we want to genenerate good samples so we give label=1
+        new_mols = []
+        for sidechains_list in sidechains_lists:
+            sidechains_list = self.tokenizer.decode_batch(sidechains_list, skip_special_tokens=True)
+            for core, chains, old_smile, task in zip(data.core_smiles, sidechains_list, data.smiles, data.task):
+                new_smile = reconstruct_from_core_and_chains(core, chains)
+                if new_smile is None:
+                    new_mols.append((task, new_smile, old_smile, None))
+                else:
+                    new_mols.append((task, new_smile, old_smile, get_fp(new_smile)))
+        return new_mols
+        
             
     def validation_step(self, graph, batch_idx):
         if not self.validation_clfs:
