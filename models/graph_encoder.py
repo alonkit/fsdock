@@ -1,5 +1,6 @@
 from typing import List, Tuple, Union
 import torch
+from torch import nn
 from torch_geometric.data import HeteroData
 from torch_geometric.transforms import ToUndirected
 
@@ -21,6 +22,7 @@ class GraphEncoder(torch.nn.Module):
         edges: List[Tuple[str, str, str]]=None,
         num_layers: int = None,
         max_length=128,
+        hidden_noise_channel:int = None
     ):
 
         assert isinstance(hidden_channels, list) or num_layers, "Either hidden_channels is a list or num_layers must be provided"
@@ -42,6 +44,16 @@ class GraphEncoder(torch.nn.Module):
                     metadata=(nodes, edges),
                 )
             )
+        hidden_noise_channel = hidden_noise_channel or num_channels[-2]
+        self.noise_conv = PGHTConv(
+                    in_channels=num_channels[-2],
+                    out_channels=hidden_noise_channel,
+                    edge_in_channels=edge_channels,
+                    num_attn_groups=attention_groups,
+                    dropout=dropout,
+                    metadata=(nodes, edges),
+                )
+        self.noise_final_layer = nn.Sequential(nn.Linear(hidden_noise_channel, hidden_noise_channel),nn.Dropout(dropout), nn.ReLU(), nn.Linear(hidden_noise_channel, 3))
         self.graph_embedder = graph_embedder
         self.max_length = max_length
 
@@ -55,18 +67,37 @@ class GraphEncoder(torch.nn.Module):
             )
             for node_t in graph.metadata()[0]
         }
-        return graph.subgraph(masks)
+        graph=  graph.subgraph(masks)
+        batch = graph['ligand'].batch
+        ptr = torch.arange(batch.shape[0]-1, device=batch.device) + 1
+        change = batch[:-1] != batch[1:]
+        ptr = torch.tensor([0, *ptr[change], batch.shape[0]], device=batch.device)
+        graph['ligand'].ptr = ptr
+        return graph
 
-    def forward(self, hdata: HeteroData):
+    def noise_forward(self, hdata: HeteroData):
+        convs = self.convs[:-1] + [self.noise_conv]
+        hdata = self.forward(hdata, convs = convs, keep_graph=True)
+        noise_pred = self.noise_final_layer(hdata['ligand'].x)
+        return noise_pred
+
+    def forward(self, hdata: HeteroData, keep_graph=False,masks:dict=None,convs=None):
         hdata = self.graph_embedder(hdata)
         hdata = ToUndirected()(hdata)
         data = hdata.to_homogeneous()
         x = data.x
-        for conv in self.convs:
+        if masks is not None:
+            for key, mask in masks.items():
+                mask_idx = hdata.node_types.index(key)
+                x[data.node_type == mask_idx][mask] = 0
+        for conv in (convs or self.convs):
             x = conv(x, data.edge_index, data.edge_attr, data.pos)
-        ligand_idx = hdata.node_types.index('ligand')
-        output = x[data.node_type == ligand_idx]
-        batch_indices = data.batch[data.node_type == ligand_idx]
+        data.x = x
+        data = data.to_heterogeneous()
+        if keep_graph:
+            return data
+        output = data['ligand'].x
+        batch_indices = data['ligand'].batch
         batch_size = batch_indices.max().item() + 1
         emb_dim = output.size(1)
 

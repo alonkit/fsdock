@@ -1,4 +1,5 @@
 from collections import defaultdict
+import copy
 from datetime import datetime
 import random
 import numpy as np
@@ -7,15 +8,20 @@ import pytorch_lightning as pl
 import torch
 from torch import nn
 from torch.optim import Adam
-from torch.utils.data import DataLoader, Dataset
+from torch_geometric.loader import DataLoader
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+from datasets.custom_distributed_sampler import CustomDistributedSampler
+from datasets.fsmol_dock import FsDockDataset
+from datasets.fsmol_dock_clf import FsDockClfDataset
+from datasets.partitioned_fsmol_dock import FsDockDatasetPartitioned
 from datasets.process_chem.process_sidechains import (
     calc_tani_sim,
     get_fp,
     reconstruct_from_core_and_chains,
 )
 from models.cfom_dock import CfomDock
+from models.tasks.task import AtomNumberTask
 from utils.logging_utils import configure_logger, get_logger
 
 
@@ -28,11 +34,12 @@ class CfomDockLightning(pl.LightningModule):
         weight_decay,
         num_gen_samples,
         loss=None,
-        validation_clfs=None,
         test_clfs=None,
         similarity_threshold=0.4,
         gen_meta_params=None,
-        name=None
+        name=None,
+        side_tasks=None,
+        smol=True,
     ):
         super().__init__()
         self.cfom_dock_model = cfom_dock_model
@@ -41,59 +48,76 @@ class CfomDockLightning(pl.LightningModule):
         if loss is None:
             loss = nn.CrossEntropyLoss()
         self.loss = loss
+        self.noise_loss = nn.MSELoss()
         self._reset_eval_step_outputs()
         self.weight_decay = weight_decay
         self.lr = lr
-        self.validation_clfs = validation_clfs
+        self.validation_clfs = None
         self.test_clfs = test_clfs
         self.similarity_threshold = similarity_threshold
         self.gen_meta_params = gen_meta_params or {"p":1.}
-        self.save_hyperparameters(
-            ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs"]
-        )
+        # self.save_hyperparameters(
+        #     ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs", 'side_']
+        # )
         self.name = name or f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
         self.test_result_path = f'test_stats/{self.name}'
+        self.side_tasks = nn.ModuleList(side_tasks) if side_tasks else None
+        self.smol = smol
 
+    @staticmethod
+    def worker_init_fn(worker_id):
+        worker_info = torch.utils.data.get_worker_info()
+        dataset = worker_info.dataset
+        dataset.sub_proteins.open()
 
     def _reset_eval_step_outputs(self):
         self.eval_step_outputs = defaultdict(lambda: defaultdict(list))
     
+    def train_dataloader(self):
+        if self.smol:
+            dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv',tokenizer=self.tokenizer, num_workers=torch.get_num_threads())
+        else:
+            dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=self.tokenizer)
+        dlt = DataLoader(dst, batch_size=2 if self.smol else 64 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
+                        worker_init_fn=self.worker_init_fn)
+        return dlt
+    
+    def val_dataloader(self):
+        dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=self.tokenizer, only_inactive=True)
+        dlv = DataLoader(dsv, batch_size=32, 
+                num_workers=torch.get_num_threads()//2, 
+                worker_init_fn=self.worker_init_fn)
+        self.validation_clfs=dsv.clfs
+        return dlv
+    
+    def t_to_sigma(self, t):
+        return 0.05 ** (1-min(t,1)) * 2 ** t
+    
     def training_step(self, data, batch_idx):
-        logits = self.cfom_dock_model(
-            data.core_tokens,
-            data.sidechain_tokens[:, :-1],
-            data,
-            (data.activity_type, data.label), 
-            molecule_sidechain_mask_idx=1
-        )
-        logits = logits.reshape(-1, logits.shape[-1])
-        tgt = data.sidechain_tokens[:, 1:].reshape(-1)
-        loss = self.loss(logits, tgt)
-        self.log("train_loss", loss, sync_dist=True)
-        return loss
-
-    def generate_samples(self, data):
-        sidechains_lists = self.cfom_dock_model.generate_samples(
-            self.num_gen_samples,
-            data.core_tokens,
-            data.core_smiles,
-            data,
-            (data.activity_type, [1] * len(data)),
-            **self.gen_meta_params
-        )
-        # we want to genenerate good samples so we give label=1
-        new_mols = []
-        for sidechains_list in sidechains_lists:
-            sidechains_list = self.tokenizer.decode_batch(sidechains_list, skip_special_tokens=True)
-            for core, chains, old_smile, task in zip(data.core_smiles, sidechains_list, data.smiles, data.task):
-                new_smile = reconstruct_from_core_and_chains(core, chains)
-                if new_smile is None:
-                    new_mols.append((task, new_smile, old_smile, None))
-                else:
-                    new_mols.append((task, new_smile, old_smile, get_fp(new_smile)))
-        return new_mols
-
-
+        if (self.current_epoch > 10 and batch_idx % 2==0) or self.current_epoch > 100:
+            logits = self.cfom_dock_model(
+                data.core_tokens,
+                data.sidechain_tokens[:, :-1],
+                data,
+                (data.activity_type, data.label), 
+                molecule_sidechain_mask_idx=1
+            )
+            logits = logits.reshape(-1, logits.shape[-1])
+            tgt = data.sidechain_tokens[:, 1:].reshape(-1)
+            loss = self.loss(logits, tgt)
+            self.log("train_loss", loss, sync_dist=True)
+            return loss
+        else:
+            poses = data['ligand'].pos
+            pos_noise = torch.randn_like(poses) * self.t_to_sigma(self.current_epoch / 100)
+            data['ligand'].pos = poses + pos_noise
+            pred_noise = self.cfom_dock_model.graph_encoder.noise_forward(data)
+            loss = self.noise_loss(pred_noise, pos_noise)
+            self.log("pos_loss", loss, sync_dist=True)
+            return loss
+            
+            
+            
     def validation_step(self, graph, batch_idx):
         if not self.validation_clfs:
             return

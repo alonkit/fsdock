@@ -29,8 +29,16 @@ class MapFileManager:
         self.zipf = None
     
     @staticmethod
-    def _file_name(name):
+    def _file_name(name:str):
+        if name.endswith('.pkl'):
+            return name
         return name + '.pkl'
+    
+    @staticmethod
+    def _unfile_name(name:str):
+        if name.endswith('.pkl'):
+            return name[:-4]
+        return name
     
     def save(self, obj, name):
         assert 'w' in self.mode , "manager must be in save mode"    
@@ -47,7 +55,8 @@ class MapFileManager:
         names = self.zipf.namelist()
         res_dct = {}
         for name in names:
-            res_dct[name] = self.load(name)
+            res_dct[self._unfile_name(name)] = self.load(name)
+        return res_dct
     
             
     def __getitem__(self, key):

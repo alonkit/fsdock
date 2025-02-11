@@ -175,7 +175,7 @@ class PGHTConv(MessagePassing):
         delta_mul = self.coords_mul_nn(coords_i - coords_j)
         delta_bias = self.coords_bias_nn(coords_i - coords_j)
         alpha = (q - k)* delta_mul + delta_bias 
-        alpha = self.attn_nn(alpha)
+        alpha = self.attn_nn(alpha / alpha.shape[1])
         alpha = self.attn_drop(alpha)
         alpha = softmax(alpha, index, ptr, size_i)
         out = (v + delta_bias).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * alpha.unsqueeze(-1)

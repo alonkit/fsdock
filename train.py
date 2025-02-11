@@ -1,5 +1,9 @@
 import scipy.spatial # very important, does not work without it, i don't know why
 import resource
+
+from datasets.custom_distributed_sampler import CustomDistributedSampler
+from datasets.partitioned_fsmol_dock import FsDockDatasetPartitioned
+from models.tasks.task import AtomNumberTask, LabelTask
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
@@ -21,7 +25,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from models.transformer import TransformerDecoder, TransformerEncoder
 from pytorch_lightning.loggers import WandbLogger
 import os
-
+from pytorch_lightning.tuner import Tuner
 from utils.logging_utils import get_logger
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -46,7 +50,7 @@ def get_model(tokenizer):
     graph_encoder = GraphEncoder(
         in_channels=32,
         edge_channels=32,
-        hidden_channels=[64,64, 64, 64, 64, 64, 64, 64, 64, 128],
+        hidden_channels=[48,48,48,48,48,48,48, 48,64],
         out_channels=128,
         attention_groups=8,
         graph_embedder=graph_embedder,
@@ -68,8 +72,12 @@ def get_model(tokenizer):
                                             start_token=tokenizer.token_to_id("<bos>"),
                                             end_token=tokenizer.token_to_id("<eos>"))
     interaction_encoder = InteractionEncoder(128)
+    side_tasks = [
+        AtomNumberTask(128,[119],graph_encoder),
+            LabelTask(128,[64,1],graph_encoder)
+    ]
     model = CfomDock(None, sidechain_decoder, interaction_encoder, graph_encoder)
-    return model
+    return model, side_tasks
 
 def worker_init_fn(worker_id):
     worker_info = torch.utils.data.get_worker_info()
@@ -80,7 +88,7 @@ def worker_init_fn(worker_id):
 def test_model():
     get_logger().info("Testing model")
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-    model = get_model(tokenizer)
+    model, side_tasks = get_model(tokenizer)
 
 
     dstest = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.70)
@@ -89,7 +97,7 @@ def test_model():
                         worker_init_fn=worker_init_fn)
     
     
-    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, test_clfs=dstest.clfs)
+    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, test_clfs=dstest.clfs, )
     trainer = pl.Trainer(
         max_epochs=100, 
         check_val_every_n_epoch=10,
@@ -99,23 +107,13 @@ def train_model(smol=False):
     wandb_logger = WandbLogger(project="CfomDockLightning", offline=smol)
 
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-    model = get_model(tokenizer)
+    model, side_tasks = get_model(tokenizer)
 
     wandb_logger.watch(model, log='all')
-    if smol:
-        dst = FsDockDataset("data/fsdock/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, num_workers=torch.get_num_threads())
-    else:
-        dst = FsDockDataset("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=tokenizer)
-    dlt = DataLoader(dst, batch_size=2 if smol else 96 , shuffle=True, num_workers=torch.get_num_threads(), 
-                    worker_init_fn=worker_init_fn)
 
-    dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=tokenizer, only_inactive=True)
-    dlv = DataLoader(dsv, batch_size=32, 
-                         num_workers=torch.get_num_threads()//2, 
-                        worker_init_fn=worker_init_fn)
+
     
-    
-    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, validation_clfs=dsv.clfs)
+    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, side_tasks=side_tasks, smol=smol)
     checkpoint_callback = ModelCheckpoint(
         save_top_k=10,
         monitor="validation_avg_success",
@@ -125,12 +123,16 @@ def train_model(smol=False):
     )
     trainer = pl.Trainer(
         # num_nodes=2,
-        max_epochs=100, 
+        # devices=10,
+        max_epochs=200, 
         callbacks=[checkpoint_callback], 
-        check_val_every_n_epoch=10,
+        check_val_every_n_epoch=1,
         strategy='ddp_find_unused_parameters_true',
         logger=wandb_logger)
-    trainer.fit(lit_model, dlt, dlv)
+    # tuner = Tuner(trainer)
+    # tuner.scale_batch_size(lit_model, mode="binsearch")
+    trainer.fit(lit_model)
+    
     wandb_logger.experiment.unwatch(model)
     dstest = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
     dltest = DataLoader(dstest, batch_size=64, 
@@ -141,6 +143,6 @@ def train_model(smol=False):
     
 
 if __name__ == "__main__":
-    # train_model(smol=bool(os.environ.get("SMOL")))
-    test_model()
+    train_model(smol=bool(os.environ.get("SMOL")))
+    # test_model()
     
