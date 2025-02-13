@@ -38,7 +38,6 @@ class CfomDockLightning(pl.LightningModule):
         similarity_threshold=0.4,
         gen_meta_params=None,
         name=None,
-        side_tasks=None,
         smol=True,
     ):
         super().__init__()
@@ -60,8 +59,8 @@ class CfomDockLightning(pl.LightningModule):
         #     ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs", 'side_']
         # )
         self.name = name or f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
+        self.name = f'cfom_dock_{self.name}'
         self.test_result_path = f'test_stats/{self.name}'
-        self.side_tasks = nn.ModuleList(side_tasks) if side_tasks else None
         self.smol = smol
 
     @staticmethod
@@ -78,7 +77,7 @@ class CfomDockLightning(pl.LightningModule):
             dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv',tokenizer=self.tokenizer, num_workers=torch.get_num_threads())
         else:
             dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=self.tokenizer)
-        dlt = DataLoader(dst, batch_size=2 if self.smol else 64 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
+        dlt = DataLoader(dst, batch_size=2 if self.smol else 24 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
                         worker_init_fn=self.worker_init_fn)
         return dlt
     
@@ -91,30 +90,21 @@ class CfomDockLightning(pl.LightningModule):
         return dlv
     
     def t_to_sigma(self, t):
-        return 0.05 ** (1-min(t,1)) * 2 ** t
+        return 0.05 ** (1-min(t,1)) * 0.2 ** t
     
     def training_step(self, data, batch_idx):
-        if (self.current_epoch > 10 and batch_idx % 2==0) or self.current_epoch > 100:
-            logits = self.cfom_dock_model(
-                data.core_tokens,
-                data.sidechain_tokens[:, :-1],
-                data,
-                (data.activity_type, data.label), 
-                molecule_sidechain_mask_idx=1
-            )
-            logits = logits.reshape(-1, logits.shape[-1])
-            tgt = data.sidechain_tokens[:, 1:].reshape(-1)
-            loss = self.loss(logits, tgt)
-            self.log("train_loss", loss, sync_dist=True)
-            return loss
-        else:
-            poses = data['ligand'].pos
-            pos_noise = torch.randn_like(poses) * self.t_to_sigma(self.current_epoch / 100)
-            data['ligand'].pos = poses + pos_noise
-            pred_noise = self.cfom_dock_model.graph_encoder.noise_forward(data)
-            loss = self.noise_loss(pred_noise, pos_noise)
-            self.log("pos_loss", loss, sync_dist=True)
-            return loss
+        logits = self.cfom_dock_model(
+            data.core_tokens,
+            data.sidechain_tokens[:, :-1],
+            data,
+            (data.activity_type, data.label), 
+            molecule_sidechain_mask_idx=1
+        )
+        logits = logits.reshape(-1, logits.shape[-1])
+        tgt = data.sidechain_tokens[:, 1:].reshape(-1)
+        loss = self.loss(logits, tgt)
+        self.log("train_loss", loss, sync_dist=True)
+        return loss
             
             
     def generate_samples(self, data):
@@ -268,7 +258,7 @@ class CfomDockLightning(pl.LightningModule):
             self.log(f"{task_name}_success", avg_success, sync_dist=True)
             self.log(f"{task_name}_std_success", std_success, sync_dist=True)
             tot_avg_success.append(avg_success)
-        self.log("validation_avg_success", sum(tot_avg_success) / len(tot_avg_success), sync_dist=True)
+        self.log("validation_avg_success", sum(tot_avg_success) / (len(tot_avg_success)+1), sync_dist=True)
         self._reset_eval_step_outputs()
 
     def configure_optimizers(self):

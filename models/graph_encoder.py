@@ -81,15 +81,11 @@ class GraphEncoder(torch.nn.Module):
         noise_pred = self.noise_final_layer(hdata['ligand'].x)
         return noise_pred
 
-    def forward(self, hdata: HeteroData, keep_graph=False,masks:dict=None,convs=None):
+    def forward(self, hdata: HeteroData, keep_graph=False,convs=None):
         hdata = self.graph_embedder(hdata)
         hdata = ToUndirected()(hdata)
         data = hdata.to_homogeneous()
         x = data.x
-        if masks is not None:
-            for key, mask in masks.items():
-                mask_idx = hdata.node_types.index(key)
-                x[data.node_type == mask_idx][mask] = 0
         for conv in (convs or self.convs):
             x = conv(x, data.edge_index, data.edge_attr, data.pos)
         data.x = x
