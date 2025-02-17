@@ -23,6 +23,7 @@ from datasets.process_chem.process_sidechains import (
 from models.cfom_dock import CfomDock
 from models.tasks.task import AtomNumberTask
 from utils.logging_utils import configure_logger, get_logger
+from rdkit import Chem
 
 
 class CfomDockLightning(pl.LightningModule):
@@ -45,7 +46,7 @@ class CfomDockLightning(pl.LightningModule):
         self.num_gen_samples = num_gen_samples
         self.tokenizer = tokenizer
         if loss is None:
-            loss = nn.CrossEntropyLoss()
+            loss = nn.CrossEntropyLoss(reduction='none')
         self.loss = loss
         self.noise_loss = nn.MSELoss()
         self._reset_eval_step_outputs()
@@ -62,6 +63,9 @@ class CfomDockLightning(pl.LightningModule):
         self.name = f'cfom_dock_{self.name}'
         self.test_result_path = f'test_stats/{self.name}'
         self.smol = smol
+        self.freeze_layers = self.cfom_dock_model.freeze_layers
+        self.unfreeze_start = 2
+        self.unfreeze_step = 2
 
     @staticmethod
     def worker_init_fn(worker_id):
@@ -92,7 +96,11 @@ class CfomDockLightning(pl.LightningModule):
     def t_to_sigma(self, t):
         return 0.05 ** (1-min(t,1)) * 0.2 ** t
     
-    def training_step(self, data, batch_idx):
+    def good_loss_ratio(self, t):
+        t = min(t,1)
+        return t * 0.9 + (1-t)*0.5
+    
+    def get_loss(self,data):
         logits = self.cfom_dock_model(
             data.core_tokens,
             data.sidechain_tokens[:, :-1],
@@ -100,16 +108,49 @@ class CfomDockLightning(pl.LightningModule):
             (data.activity_type, data.label), 
             molecule_sidechain_mask_idx=1
         )
-        logits = logits.reshape(-1, logits.shape[-1])
-        tgt = data.sidechain_tokens[:, 1:].reshape(-1)
-        loss = self.loss(logits, tgt)
+        logits = logits.transpose(1, -1)
+        tgt = data.sidechain_tokens[:, 1:]
+        return self.loss(logits, tgt)
+    
+    
+    def on_train_epoch_start(self):
+        if self.current_epoch == 0:
+            for layers in self.freeze_layers:
+                if not isinstance(layers,list):
+                    layers = [layers]
+                for layer in layers:
+                    if layer is None:
+                        continue
+                    for param in layer.parameters():
+                        param.requires_grad=False
+        elif (self.current_epoch - self.unfreeze_start) % self.unfreeze_step == 0:
+            layer_idx = len(self.freeze_layers) - (self.current_epoch - self.unfreeze_start) // self.unfreeze_step - 1
+            if layer_idx < 0:
+                return
+            layers = self.freeze_layers[layer_idx]
+
+            if not isinstance(layers,list):
+                layers = [layers]
+            for layer in layers:
+                if layer is None:
+                    continue
+                for param in layer.parameters():
+                    param.requires_grad=True
+    
+    def training_step(self, data, batch_idx):
+        alpha = self.good_loss_ratio(self.current_epoch / self.trainer.max_epochs)
+        loss = self.get_loss(data)
+        loss_weights = data.label * alpha + (1- data.label) * (1-alpha)
+        loss = loss * loss_weights.unsqueeze(-1)
+        loss = loss.mean()
         self.log("train_loss", loss, sync_dist=True)
+        self.log("alpha", alpha, sync_dist=True)
         return loss
             
             
     def generate_samples(self, data):
         sidechains_lists = self.cfom_dock_model.generate_samples(
-            self.num_gen_samples,
+            self.num_gen_samples*3,
             data.core_tokens,
             data.core_smiles,
             data,
@@ -123,13 +164,23 @@ class CfomDockLightning(pl.LightningModule):
             for core, chains, old_smile, task in zip(data.core_smiles, sidechains_list, data.smiles, data.task):
                 new_smile = reconstruct_from_core_and_chains(core, chains)
                 if new_smile is None:
-                    new_mols.append((task, new_smile, old_smile, None))
+                    continue
+                    # new_mols.append((task, new_smile, old_smile, None))
                 else:
+                    old_smile = self.removeChirality(old_smile)
+                    new_smile = self.removeChirality(new_smile)
                     new_mols.append((task, new_smile, old_smile, get_fp(new_smile)))
         return new_mols
-        
-            
+    
+    @staticmethod
+    def removeChirality(smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        Chem.RemoveStereochemistry(mol)
+        return Chem.MolToSmiles(mol)
+
     def validation_step(self, graph, batch_idx):
+        loss = self.get_loss(graph).mean()
+        self.log("val_loss", loss,batch_size=len(graph),  sync_dist=True)
         if not self.validation_clfs:
             return
         gen_res = self.generate_samples(graph)
@@ -263,4 +314,9 @@ class CfomDockLightning(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        return optimizer
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, min_lr=self.lr / 100)
+        return {
+                        "optimizer": optimizer,
+                        "lr_scheduler": sched,
+                        "monitor": "train_loss"
+                    }

@@ -14,7 +14,7 @@ from torch_geometric.nn.inits import glorot, ones, reset
 from torch_geometric.nn.module_dict import ModuleDict
 from torch_geometric.nn.parameter_dict import ParameterDict
 from torch_geometric.typing import EdgeType, Metadata, NodeType
-from torch_geometric.utils import softmax
+from torch_geometric.utils import softmax, scatter
 
 
 def group(xs: List[Tensor], aggr: Optional[str]) -> Optional[Tensor]:
@@ -104,6 +104,8 @@ class PGHTConv(MessagePassing):
         self.reset_parameters()
         self.attn_drop = nn.Dropout(dropout)
         
+        self.act = nn.Sigmoid()
+        
             
     # nn.Sequential(nn.Linear(cross_distance_embed_dim, emb_dim), nn.ReLU(), nn.Dropout(dropout),nn.Linear(emb_dim, emb_dim))
     def reset_parameters(self):
@@ -169,17 +171,14 @@ class PGHTConv(MessagePassing):
                 index: Tensor, ptr: Optional[Tensor],
                 size_i: Optional[int]) -> Tensor:
         v_i_e_v_j = torch.concat([v_i, e, v_j],dim=-1) # maybe through coords here?
+        # dists = (coords_i - coords_j).norm()
         k = self.k_lin(v_i_e_v_j)
         q = self.q_lin(v_i_e_v_j)
         v = self.v_lin(v_i_e_v_j)
-        delta_mul = self.coords_mul_nn(coords_i - coords_j)
-        delta_bias = self.coords_bias_nn(coords_i - coords_j)
-        alpha = (q - k)* delta_mul + delta_bias 
-        alpha = self.attn_nn(alpha / alpha.shape[1])
-        alpha = self.attn_drop(alpha)
-        alpha = softmax(alpha, index, ptr, size_i)
-        out = (v + delta_bias).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * alpha.unsqueeze(-1)
-        return out.view(-1, self.out_channels)
+        
+        weighted_v = self.act(q - k) * v
+        # res = scatter(weighted_v, index, reduce="mean")
+        return weighted_v
 
     def __repr__(self) -> str:
         return (f'{self.__class__.__name__}(-1, {self.out_channels})')

@@ -22,7 +22,6 @@ class GraphEncoder(torch.nn.Module):
         edges: List[Tuple[str, str, str]]=None,
         num_layers: int = None,
         max_length=128,
-        hidden_noise_channel:int = None
     ):
 
         assert isinstance(hidden_channels, list) or num_layers, "Either hidden_channels is a list or num_layers must be provided"
@@ -44,18 +43,12 @@ class GraphEncoder(torch.nn.Module):
                     metadata=(nodes, edges),
                 )
             )
-        hidden_noise_channel = hidden_noise_channel or num_channels[-2]
-        self.noise_conv = PGHTConv(
-                    in_channels=num_channels[-2],
-                    out_channels=hidden_noise_channel,
-                    edge_in_channels=edge_channels,
-                    num_attn_groups=attention_groups,
-                    dropout=dropout,
-                    metadata=(nodes, edges),
-                )
-        self.noise_final_layer = nn.Sequential(nn.Linear(hidden_noise_channel, hidden_noise_channel),nn.Dropout(dropout), nn.ReLU(), nn.Linear(hidden_noise_channel, 3))
+        self.edge_channels = edge_channels
         self.graph_embedder = graph_embedder
         self.max_length = max_length
+        self.out_channels = out_channels
+        
+        self.freeze_layers = [graph_embedder, *self.convs ]
 
     def mask_graph_sidechains(self, graph, molecule_sidechain_mask_idx):
         device = graph['ligand'].x.device
@@ -75,13 +68,21 @@ class GraphEncoder(torch.nn.Module):
         graph['ligand'].ptr = ptr
         return graph
 
-    def noise_forward(self, hdata: HeteroData):
-        convs = self.convs[:-1] + [self.noise_conv]
-        hdata = self.forward(hdata, convs = convs, keep_graph=True)
-        noise_pred = self.noise_final_layer(hdata['ligand'].x)
+    def pred_distances(self, data):
+        data = self.forward(data, keep_hetrograph=True)
+        ll_i, ll_j = data['ligand'].x[data['ligand'].edge_index]
+        
+        v_i, v_j = data.x[data.edge_index]
+        v_i_e_v_j = torch.concat([v_i, data.edge_index, v_j],dim=-1)
+        pred_dists = self.dist_final_layer(v_i_e_v_j)
+        return pred_dists
+
+    def dist_forward(self, hdata: HeteroData):
+        hdata = self.forward(hdata, keep_homograph=True)
+        noise_pred = self.dist_final_layer(hdata['ligand'].x)
         return noise_pred
 
-    def forward(self, hdata: HeteroData, keep_graph=False,convs=None):
+    def forward(self, hdata: HeteroData, keep_hetrograph=False,keep_homograph=False,convs=None):
         hdata = self.graph_embedder(hdata)
         hdata = ToUndirected()(hdata)
         data = hdata.to_homogeneous()
@@ -89,8 +90,10 @@ class GraphEncoder(torch.nn.Module):
         for conv in (convs or self.convs):
             x = conv(x, data.edge_index, data.edge_attr, data.pos)
         data.x = x
+        if keep_homograph:
+            return data
         data = data.to_heterogeneous()
-        if keep_graph:
+        if keep_hetrograph:
             return data
         output = data['ligand'].x
         batch_indices = data['ligand'].batch
