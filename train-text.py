@@ -74,7 +74,7 @@ def get_model(tokenizer):
                                             start_token=tokenizer.token_to_id("<bos>"),
                                             end_token=tokenizer.token_to_id("<eos>"))
     interaction_encoder = InteractionEncoder(128)
-    model = CfomDock(None, sidechain_decoder, interaction_encoder, graph_encoder)
+    model = CfomDock(smiles_encoder, sidechain_decoder, interaction_encoder, None)
     return model
 
 def worker_init_fn(worker_id):
@@ -141,11 +141,6 @@ def train_model(smol=False):
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
     model = get_model(tokenizer)
     
-    # load finetuned
-    load_finedtuned_graph_encoder(model, '/home/alon.kitin/fs-dock/checkpoints/dock_2025-02-17-19_55_19/epoch=199-val_noise_loss=0.01078.ckpt')
-    #pretrain
-    # pretrain_model(model, wandb_logger, smol)
-
     wandb_logger.watch(model, log='all')
 
     
@@ -239,6 +234,6 @@ def train_fs_model(smol=False):
 
 if __name__ == "__main__":
     # train_model(smol=bool(os.environ.get("SMOL")))
-    train_fs_model(smol=bool(os.environ.get("SMOL")))
-    # test_model('checkpoints/cfom_dock_2025-02-19-00_15_46/epoch=84-validation_avg_success=0.23056.ckpt')
+    # train_fs_model(smol=bool(os.environ.get("SMOL")))
+    test_model('/home/alon.kitin/fs-dock/checkpoints/cfom_dock_2025-02-24-07_36_01/epoch=124-validation_avg_success=0.21902.ckpt')
     

@@ -64,7 +64,7 @@ class CfomDockLightning(pl.LightningModule):
         self.test_result_path = f'test_stats/{self.name}'
         self.smol = smol
         self.freeze_layers = self.cfom_dock_model.freeze_layers
-        self.unfreeze_start = 2
+        self.unfreeze_start = 4
         self.unfreeze_step = 2
 
     @staticmethod
@@ -81,7 +81,7 @@ class CfomDockLightning(pl.LightningModule):
             dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv',tokenizer=self.tokenizer, num_workers=torch.get_num_threads())
         else:
             dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=self.tokenizer)
-        dlt = DataLoader(dst, batch_size=2 if self.smol else 24 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
+        dlt = DataLoader(dst, batch_size=2 if self.smol else 20 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
                         worker_init_fn=self.worker_init_fn)
         return dlt
     
@@ -123,6 +123,8 @@ class CfomDockLightning(pl.LightningModule):
                         continue
                     for param in layer.parameters():
                         param.requires_grad=False
+        if self.current_epoch < self.unfreeze_start:
+            return
         elif (self.current_epoch - self.unfreeze_start) % self.unfreeze_step == 0:
             layer_idx = len(self.freeze_layers) - (self.current_epoch - self.unfreeze_start) // self.unfreeze_step - 1
             if layer_idx < 0:

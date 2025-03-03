@@ -20,7 +20,10 @@ class CfomDock(nn.Module):
         self.decoder = transformer_decoder
         self.interaction_encoder = interaction_encoder
         # self.linear = nn.Linear(num_gnn_features, d_model)
-        self.freeze_layers = [*self.graph_encoder.freeze_layers, [self.text_encoder, self.interaction_encoder]]
+        if self.graph_encoder is not None:
+            self.freeze_layers = [*self.graph_encoder.freeze_layers, [self.text_encoder, self.interaction_encoder]]
+        else:
+            self.freeze_layers = []
 
     def _train_decode(self, tgt, memory, memory_key_padding_mask):
         target_mask, target_padding_mask = self.decoder.create_target_masks(tgt)

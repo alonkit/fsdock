@@ -165,6 +165,9 @@ class FsDockDatasetPartitioned(Dataset):
     def __getitem__(self, idx):
         if isinstance(idx, tuple):
             task_name, i = idx
+        elif isinstance(idx,list):
+            items = [self[s_idx] for s_idx in idx]
+            return items
         else:
             task_name, i = self._indices[idx]
         

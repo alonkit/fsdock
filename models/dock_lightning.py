@@ -34,6 +34,7 @@ class DockLightning(pl.LightningModule):
         weight_decay,
         name=None,
         smol=True,
+        max_noise_scale=5.
     ):
         super().__init__()
         self.lr = lr
@@ -45,6 +46,7 @@ class DockLightning(pl.LightningModule):
         self.name = name or f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
         self.name = f'dock_{self.name}'
         self.smol = smol
+        self.max_noise_scale = max_noise_scale
 
     @staticmethod
     def worker_init_fn(worker_id):
@@ -69,7 +71,7 @@ class DockLightning(pl.LightningModule):
         return dlv
     
     def t_to_sigma(self, t):
-        return 0.05 ** (1-min(t,1)) * 0.2 ** t
+        return 0.05 ** (1-min(t,1)) * self.max_noise_scale ** t
     
     def pred_distances(self, data, orig_lig_poses):
         data = self.graph_encoder_model(data, keep_hetrograph=True)
