@@ -1,5 +1,6 @@
 from typing import List, Tuple, Union
 import torch
+from torch import nn
 from torch_geometric.data import HeteroData
 from torch_geometric.transforms import ToUndirected
 
@@ -42,16 +43,59 @@ class GraphEncoder(torch.nn.Module):
                     metadata=(nodes, edges),
                 )
             )
+        self.edge_channels = edge_channels
         self.graph_embedder = graph_embedder
         self.max_length = max_length
+        self.out_channels = out_channels
         
-    def forward(self, data: HeteroData):
-        data = self.graph_embedder(data)
-        data = ToUndirected()(data)
-        node_attr_dict = data.x_dict
-        for conv in self.convs:
-            node_attr_dict = conv(node_attr_dict, data.edge_index_dict, data.edge_attr_dict, data.pos_dict)
-        output = node_attr_dict['ligand']
+        self.freeze_layers = [graph_embedder, *self.convs ]
+
+    def mask_graph_sidechains(self, graph, molecule_sidechain_mask_idx):
+        device = graph['ligand'].x.device
+        masks = {
+            node_t:(
+                (graph.sidechains_mask < molecule_sidechain_mask_idx).to(device)
+                if node_t == "ligand"
+                else torch.arange(graph[node_t].num_nodes, device=device)
+            )
+            for node_t in graph.metadata()[0]
+        }
+        graph=  graph.subgraph(masks)
+        batch = graph['ligand'].batch
+        ptr = torch.arange(batch.shape[0]-1, device=batch.device) + 1
+        change = batch[:-1] != batch[1:]
+        ptr = torch.tensor([0, *ptr[change], batch.shape[0]], device=batch.device)
+        graph['ligand'].ptr = ptr
+        return graph
+
+    def pred_distances(self, data):
+        data = self.forward(data, keep_hetrograph=True)
+        ll_i, ll_j = data['ligand'].x[data['ligand'].edge_index]
+        
+        v_i, v_j = data.x[data.edge_index]
+        v_i_e_v_j = torch.concat([v_i, data.edge_index, v_j],dim=-1)
+        pred_dists = self.dist_final_layer(v_i_e_v_j)
+        return pred_dists
+
+    def dist_forward(self, hdata: HeteroData):
+        hdata = self.forward(hdata, keep_homograph=True)
+        noise_pred = self.dist_final_layer(hdata['ligand'].x)
+        return noise_pred
+
+    def forward(self, hdata: HeteroData, keep_hetrograph=False,keep_homograph=False,convs=None):
+        hdata = self.graph_embedder(hdata)
+        hdata = ToUndirected()(hdata)
+        data = hdata.to_homogeneous()
+        x = data.x
+        for conv in (convs or self.convs):
+            x = conv(x, data.edge_index, data.edge_attr, data.pos)
+        data.x = x
+        if keep_homograph:
+            return data
+        data = data.to_heterogeneous()
+        if keep_hetrograph:
+            return data
+        output = data['ligand'].x
         batch_indices = data['ligand'].batch
         batch_size = batch_indices.max().item() + 1
         emb_dim = output.size(1)
@@ -77,4 +121,3 @@ class GraphEncoder(torch.nn.Module):
         mask = torch.zeros(batch_size,self.max_length).to(batch_indices.device) + 1
         mask[self._graph_batch_indices_to_sequence(batch_indices)] = 0
         return mask.bool()
-        

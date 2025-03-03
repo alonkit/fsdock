@@ -14,3 +14,6 @@
 data/fsdock/
 lightning_logs/
 checkpoints/
+wandb/
+__pycache__/
+test_stats/*

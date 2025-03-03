@@ -18,7 +18,19 @@
             "name": "debug train",
             "type": "debugpy",
             "request": "launch",
-            "program": "train.py",
+            "program": "train-text.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "SMOL": "1"
+            }
+        },
+
+        {
+            "name": "debug dataset",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "run_dataset.py",
             "console": "integratedTerminal",
             "justMyCode": false
         }
