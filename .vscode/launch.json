@@ -18,7 +18,7 @@
             "name": "debug train",
             "type": "debugpy",
             "request": "launch",
-            "program": "train-text.py",
+            "program": "train.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {

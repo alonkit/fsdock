@@ -1,6 +1,7 @@
 from collections import defaultdict
 import copy
 from datetime import datetime
+import os
 import random
 import numpy as np
 import pandas as pd
@@ -86,7 +87,7 @@ class CfomDockLightning(pl.LightningModule):
         return dlt
     
     def val_dataloader(self):
-        dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=self.tokenizer, only_inactive=True)
+        dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=self.tokenizer, only_inactive=True, min_roc_auc=0.70)
         dlv = DataLoader(dsv, batch_size=32, 
                 num_workers=torch.get_num_threads()//2, 
                 worker_init_fn=self.worker_init_fn)
@@ -103,13 +104,13 @@ class CfomDockLightning(pl.LightningModule):
     def get_loss(self,data):
         logits = self.cfom_dock_model(
             data.core_tokens,
-            data.sidechain_tokens[:, :-1],
+            data.split_sidechain_tokens[:, :-1],
             data,
             (data.activity_type, data.label), 
             molecule_sidechain_mask_idx=1
         )
         logits = logits.transpose(1, -1)
-        tgt = data.sidechain_tokens[:, 1:]
+        tgt = data.split_sidechain_tokens[:, 1:]
         return self.loss(logits, tgt)
     
     
@@ -140,13 +141,13 @@ class CfomDockLightning(pl.LightningModule):
                     param.requires_grad=True
     
     def training_step(self, data, batch_idx):
-        alpha = self.good_loss_ratio(self.current_epoch / self.trainer.max_epochs)
+        # alpha = self.good_loss_ratio(self.current_epoch / self.trainer.max_epochs)
         loss = self.get_loss(data)
-        loss_weights = data.label * alpha + (1- data.label) * (1-alpha)
-        loss = loss * loss_weights.unsqueeze(-1)
+        # loss_weights = data.label * alpha + (1- data.label) * (1-alpha)
+        # loss = loss * loss_weights.unsqueeze(-1)
         loss = loss.mean()
         self.log("train_loss", loss, sync_dist=True)
-        self.log("alpha", alpha, sync_dist=True)
+        # self.log("alpha", alpha, sync_dist=True)
         return loss
             
             
@@ -162,9 +163,11 @@ class CfomDockLightning(pl.LightningModule):
         # we want to genenerate good samples so we give label=1
         new_mols = []
         for sidechains_list in sidechains_lists:
-            sidechains_list = self.tokenizer.decode_batch(sidechains_list, skip_special_tokens=True)
             for core, chains, old_smile, task in zip(data.core_smiles, sidechains_list, data.smiles, data.task):
-                new_smile = reconstruct_from_core_and_chains(core, chains)
+                chains = self.tokenizer.decode_batch(chains, skip_special_tokens=True)
+                chains = [f'[{i+1}*]{ch}' for i,ch in enumerate(chains)]
+                chains_smiles = '.'.join(chains)
+                new_smile = reconstruct_from_core_and_chains(core, chains_smiles)
                 if new_smile is None:
                     continue
                     # new_mols.append((task, new_smile, old_smile, None))
@@ -249,8 +252,9 @@ class CfomDockLightning(pl.LightningModule):
         )
 
     def on_test_end(self):
+        os.makedirs(self.test_result_path)
         for name, opt_molecules in self.eval_step_outputs.items():
-            with open(f'{self.test_result_path}-{name}', 'w') as f:
+            with open(f'{self.test_result_path}/{name}', 'w') as f:
                 for orig_mol in opt_molecules:
                     for new_mol,_ in opt_molecules[orig_mol]:
                         f.write(f'{orig_mol} {new_mol}\n')
@@ -282,7 +286,7 @@ class CfomDockLightning(pl.LightningModule):
             results['success'].append(avg_success)
             results['std_success'].append(std_success)
             results['total'].append(sum(map(len, opt_molecules.values())))
-        pd.DataFrame(results).to_csv(f'{self.test_result_path}.csv')
+        pd.DataFrame(results).to_csv(f'{self.test_result_path}/results.csv')
         self._reset_eval_step_outputs()
 
     def on_validation_epoch_end(self):

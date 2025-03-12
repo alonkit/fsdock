@@ -118,7 +118,7 @@ def pretrain_model(full_model, wandb_logger,smol):
     trainer = pl.Trainer(
         # num_nodes=2,
         # devices=10,
-        max_epochs=200, 
+        max_epochs=100, 
         callbacks=[checkpoint_callback], 
         check_val_every_n_epoch=10,
         strategy='ddp_find_unused_parameters_true',
@@ -142,7 +142,7 @@ def train_model(smol=False):
     model = get_model(tokenizer)
     
     # load finetuned
-    load_finedtuned_graph_encoder(model, '/home/alon.kitin/fs-dock/checkpoints/dock_2025-02-17-19_55_19/epoch=199-val_noise_loss=0.01078.ckpt')
+    load_finedtuned_graph_encoder(model, '/home/alon.kitin/fs-dock/checkpoints/dock_2025-03-08-20_42_37/epoch=89-val_noise_loss=0.01019.ckpt')
     #pretrain
     # pretrain_model(model, wandb_logger, smol)
 
@@ -161,7 +161,7 @@ def train_model(smol=False):
     )
     trainer = pl.Trainer(
         # num_nodes=2,
-        num_sanity_val_steps=0,
+        num_sanity_val_steps=2 if smol else 0,
         devices=1 if smol else 16,
         max_epochs=150, 
         callbacks=[checkpoint_callback], 
@@ -173,11 +173,11 @@ def train_model(smol=False):
     trainer.fit(cfom_dock_lit_model)
     
     wandb_logger.experiment.unwatch(model)
-    dstest = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
-    dltest = DataLoader(dstest, batch_size=64, 
-                         num_workers=torch.get_num_threads()//2, 
-                        worker_init_fn=worker_init_fn)
-    trainer.test(cfom_dock_lit_model, dltest, ckpt_path="best")
+    # dstest = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
+    # dltest = DataLoader(dstest, batch_size=64, 
+    #                      num_workers=torch.get_num_threads()//2, 
+    #                     worker_init_fn=worker_init_fn)
+    # trainer.test(cfom_dock_lit_model, dltest, ckpt_path="best")
 
     
 def train_fs_model(smol=False):
@@ -225,20 +225,8 @@ def train_fs_model(smol=False):
     # trainer.test(fs_dock_lit_model, dltest, ckpt_path="best")
 
 
-# dsv = FsDockDatasetPartitioned(
-#                 'data/fsdock/valid',
-#                 '../docking_cfom/valid_tasks.csv',
-#                         )
-# for i in range(16):
-#     dlv = DataLoader(dsv, 
-#                         sampler=CustomTaskDistributedSampler(dsv, shuffle=True,
-#                                         task_size=18, num_replicas=16, rank=i ))
-#     for j,b in enumerate(dlv):
-#         pass
-#     print(len(dlv), i , j)
-
 if __name__ == "__main__":
-    # train_model(smol=bool(os.environ.get("SMOL")))
-    train_fs_model(smol=bool(os.environ.get("SMOL")))
-    # test_model('checkpoints/cfom_dock_2025-02-19-00_15_46/epoch=84-validation_avg_success=0.23056.ckpt')
+    train_model(smol=bool(os.environ.get("SMOL")))
+    # train_fs_model(smol=bool(os.environ.get("SMOL")))
+    test_model('/home/alon.kitin/fs-dock/checkpoints/cfom_dock_2025-03-09-07_36_09/epoch=49-validation_avg_success=0.20919.ckpt')
     

@@ -4,6 +4,7 @@ import os.path as osp
 from collections import defaultdict
 import pickle
 import random
+import re
 import time
 import traceback
 from typing import Callable, List, Tuple
@@ -99,10 +100,19 @@ class FsDockDataset(Dataset):
 
     def tokenize_smiles(self, graph):
         if self.tokenizer:
+            #ugly fix:
+            graph.num_sidechains = int(graph['ligand'].x[:,0].sum().item())
+            
             core_tokens = self.tokenizer.encode(graph.core_smiles).ids
             sidechain_tokens = self.tokenizer.encode(graph.sidechains_smiles).ids
             graph.core_tokens = torch.tensor(core_tokens).unsqueeze(0)
             graph.sidechain_tokens = torch.tensor(sidechain_tokens).unsqueeze(0)
+            sidechains = re.sub('\[[0-9]+\*\]','', graph.sidechains_smiles).split('.')
+            if graph.sidechains_smiles == '':
+                sidechains = [''] * graph.num_sidechains  
+            sidechains = torch.tensor(list(map(lambda sch: self.tokenizer.encode(sch).ids, sidechains)))
+            graph.split_sidechain_tokens = sidechains
+            pass
 
     def connect_ligand_to_protein(self, task_name, idx, data):
         task = self.tasks[task_name]
@@ -151,9 +161,11 @@ class FsDockDataset(Dataset):
         
         graph = deepcopy(self.tasks[task_name]["graphs"][i])
         graph.task = task_name
-        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
+        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask).to(torch.int)
+        graph.hole_neighbors = torch.tensor(graph.hole_neighbors)
         self.connect_ligand_to_protein(self.tasks[task_name]["name"], i, graph)
         self.tokenize_smiles(graph)
+        graph.num_sidechains = int(graph.num_sidechains)
         return graph
 
     def get_task_metadata(self, task_name):
@@ -242,7 +254,7 @@ class FsDockDataset(Dataset):
             smiles = get_mol_smiles(ligand)
             res['ligand']=ligand
             res['smiles']=smiles
-            core, core_smiles, sidechains, sidechains_smiles = get_core_and_chains(
+            core, core_smiles, sidechains, sidechains_smiles, hole_neighbors = get_core_and_chains(
                 ligand
             )
             if core is None:
@@ -254,8 +266,9 @@ class FsDockDataset(Dataset):
             res['core_smiles']=core_smiles
             res['sidechains']=sidechains
             res['sidechains_smiles']=sidechains_smiles
-            
+            res['hole_neighbors']=hole_neighbors
             sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
+            res['num_sidechains']= sidechains_mask.max().item()
             hole_features = get_holes(ligand)
             extra_atom_feats = {'__holeIdx': hole_features}
             res['sidechains_mask']=sidechains_mask
@@ -418,6 +431,8 @@ class FsDockDataset(Dataset):
             ligand_graph.core_smiles = ligand_data['core_smiles']
             ligand_graph.sidechains_smiles = ligand_data['sidechains_smiles']
             ligand_graph.sidechains_mask = ligand_data['sidechains_mask']
+            ligand_graph.hole_neighbors = ligand_data['hole_neighbors']
+            ligand_graph.num_sidechains = ligand_data['num_sidechains']
             ligand_graph.activity_type = row["type"]
             ligand_graph.label = row["label"]
             task["activity_type"] = row["type"]

@@ -50,6 +50,14 @@ class GraphEncoder(torch.nn.Module):
         
         self.freeze_layers = [graph_embedder, *self.convs ]
 
+    def get_new_indexes_after_masking(self,graph, idxs, molecule_sidechain_mask_idx):
+        full_idxs = torch.arange(graph['ligand'].x.shape[0], device=idxs.device)
+        mask = (graph.sidechains_mask < molecule_sidechain_mask_idx).to(full_idxs.device)
+        full_idxs_after_masking = full_idxs[mask]
+        return torch.searchsorted(full_idxs_after_masking,idxs)
+        
+
+    
     def mask_graph_sidechains(self, graph, molecule_sidechain_mask_idx):
         device = graph['ligand'].x.device
         masks = {

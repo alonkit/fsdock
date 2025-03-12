@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem, DataStructs
 from multiprocessing import Pool
-
+import re
 import torch
 from torch_geometric.data import Dataset, HeteroData, makedirs, Batch
 from torch_geometric.data.dataset import files_exist
@@ -122,6 +122,9 @@ class FsDockDatasetPartitioned(Dataset):
             sidechain_tokens = self.tokenizer.encode(graph.sidechains_smiles).ids
             graph.core_tokens = torch.tensor(core_tokens).unsqueeze(0)
             graph.sidechain_tokens = torch.tensor(sidechain_tokens).unsqueeze(0)
+            sidechains = re.sub('\[[0-9]+\*\]','', graph.sidechains_smiles).split('.')
+            sidechains = torch.tensor(list(map(lambda sch: self.tokenizer.encode(sch).ids, sidechains)))
+            graph.split_sidechain_tokens = sidechains
 
     def connect_ligand_to_protein(self, task_name, idx, data):
         task = self.tasks[task_name]
@@ -173,8 +176,10 @@ class FsDockDatasetPartitioned(Dataset):
         
         graph = deepcopy(self.tasks[task_name]["graphs"][i])
         graph.task = task_name
-        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
+        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask).to(torch.int)
+        graph.hole_neighbors = torch.tensor(graph.hole_neighbors)
         self.connect_ligand_to_protein(self.tasks[task_name]["name"], i, graph)
+        graph.num_sidechains = int(graph.num_sidechains)
         self.tokenize_smiles(graph)
         return graph
 
@@ -279,7 +284,7 @@ class FsDockDatasetPartitioned(Dataset):
             smiles = get_mol_smiles(ligand)
             res['ligand']=ligand
             res['smiles']=smiles
-            core, core_smiles, sidechains, sidechains_smiles = get_core_and_chains(
+            core, core_smiles, sidechains, sidechains_smiles,hole_neighbors = get_core_and_chains(
                 ligand
             )
             if core is None:
@@ -291,8 +296,9 @@ class FsDockDatasetPartitioned(Dataset):
             res['core_smiles']=core_smiles
             res['sidechains']=sidechains
             res['sidechains_smiles']=sidechains_smiles
-            
+            res['hole_neighbors']=hole_neighbors
             sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
+            res['num_sidechains']= sidechains_mask.max().item()
             hole_features = get_holes(ligand)
             extra_atom_feats = {'__holeIdx': hole_features}
             res['sidechains_mask']=sidechains_mask
@@ -467,6 +473,8 @@ class FsDockDatasetPartitioned(Dataset):
             ligand_graph.core_smiles = ligand_data['core_smiles']
             ligand_graph.sidechains_smiles = ligand_data['sidechains_smiles']
             ligand_graph.sidechains_mask = ligand_data['sidechains_mask']
+            ligand_graph.hole_neighbors = ligand_data['hole_neighbors']
+            ligand_graph.num_sidechains = ligand_data['num_sidechains']
             ligand_graph.activity_type = row["type"]
             ligand_graph.label = row["label"]
             task["activity_type"] = row["type"]

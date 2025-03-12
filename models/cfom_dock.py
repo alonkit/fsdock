@@ -1,5 +1,6 @@
 from collections import defaultdict
 import torch
+from torch_cluster import radius_graph, radius
 from torch_geometric.nn import GCNConv
 
 import torch.nn as nn
@@ -35,7 +36,7 @@ class CfomDock(nn.Module):
             memory_key_padding_mask=memory_key_padding_mask,
         )
         return output
-    
+
     def _create_text_memory(self, smiles_tokens_src):
         if self.text_encoder is None:
             return None, None
@@ -51,24 +52,50 @@ class CfomDock(nn.Module):
         smiles_padding_mask = smiles_padding_mask[:, ~smiles_padding_mask.all(0)]
         return smiles_memory, smiles_padding_mask
 
+    def _get_local_cluster_vecs(self, g, cluster_centers_idxs, c_name, amount):
+        edge_index = g['ligand',c_name].edge_index
+        edges_with_centers = torch.isin(edge_index[0], cluster_centers_idxs)
+        edge_len = g['ligand'].pos[edge_index[0][edges_with_centers]] - g['ligand'].pos[edge_index[1][edges_with_centers]]
+        edge_len = torch.norm(edge_len, dim=1)
+        groups = edge_index[0][edges_with_centers]
+        for idx in cluster_centers_idxs:
+            curr_edge_len = edge_len[groups == idx]
+            closest_in_cluster = torch.argsort(curr_edge_len).indices[:amount]
+            print(closest_in_cluster)
+            pass
+        
+    def _get_local_clusters_vecs(self, graph_data, cluster_centers_idxs):
+        pass
+        
+
     def _create_graph_memory(self, graph_data, molecule_sidechain_mask_idx):
         if self.graph_encoder is None:
             return None, None
-        graph_data = self.graph_encoder.mask_graph_sidechains(
+
+        neighbor_idxs = graph_data.hole_neighbors + graph_data["ligand"].ptr[
+            :-1
+        ].repeat_interleave(graph_data.num_sidechains)
+        neighbor_idxs = self.graph_encoder.get_new_indexes_after_masking(
+            graph_data, neighbor_idxs, molecule_sidechain_mask_idx
+        )
+        masked_graph_data = self.graph_encoder.mask_graph_sidechains(
             graph_data, molecule_sidechain_mask_idx
         )
-        graph_memory = self.graph_encoder(graph_data)
-        graph_memory = graph_memory  # need to get mask and do all(0) to get the idx where all are padding
-        graph_padding_mask = self.graph_encoder.create_memory_key_padding_mask(
-            graph_data
-        )
-        graph_memory = graph_memory[:, ~graph_padding_mask.all(0)]
-        graph_padding_mask = graph_padding_mask[:, ~graph_padding_mask.all(0)]
-        return graph_memory, graph_padding_mask
-    
-    def _create_interaction_memory(self, interaction_data):
+        graph_memory = self.graph_encoder(masked_graph_data, keep_hetrograph=True)['ligand'].x
+        graph_memory = graph_memory[neighbor_idxs].unsqueeze(1)
+        # graph_padding_mask = self.graph_encoder.create_memory_key_padding_mask(
+        #     graph_data
+        # )
+        # graph_memory = graph_memory[:, ~graph_padding_mask.all(0)]
+        # graph_padding_mask = graph_padding_mask[:, ~graph_padding_mask.all(0)]
+        return graph_memory, torch.zeros(graph_memory.shape[0], graph_memory.shape[1]).bool().to(graph_memory.device)
+
+    def _create_interaction_memory(self, interaction_data, num_sidechains):
         if self.interaction_encoder is None:
             return None, None
+        interaction_data = list(interaction_data)
+        interaction_data[0] = sum([[d]*n.item() for d,n in zip(interaction_data[0], num_sidechains)], [])
+        interaction_data[1] = sum([[d]*n.item() for d,n in zip(interaction_data[1], num_sidechains)], [])
         interaction_memory = self.interaction_encoder(*interaction_data).unsqueeze(1)
         interaction_padding_mask = (
             torch.zeros(*interaction_memory.shape[0:2])
@@ -76,10 +103,10 @@ class CfomDock(nn.Module):
             .to(interaction_memory.device)
         )
         return interaction_memory, interaction_padding_mask
-    
+
     def remove_nones(self, l):
         return [x for x in l if x is not None]
-    
+
     def _create_memory(
         self,
         smiles_tokens_src,
@@ -93,9 +120,9 @@ class CfomDock(nn.Module):
             graph_data, molecule_sidechain_mask_idx
         )
         interaction_memory, interaction_padding_mask = self._create_interaction_memory(
-            interaction_data
+            interaction_data, graph_data.num_sidechains
         )
-        
+
         # Concatenate encoder output with GNN output
         combined_memory = torch.cat(
             self.remove_nones([smiles_memory, graph_memory, interaction_memory]), dim=1
@@ -123,8 +150,9 @@ class CfomDock(nn.Module):
             batch_samples = self.decoder.generate(combined_memory, memory_padding_mask, **kwargs)
             batch_samples = batch_samples.cpu().numpy()
             sidechains_list = []
-            for sidechains, core in zip(batch_samples, smiles_src):
-                sidechains_list.append(sidechains)
+            splits = torch.cumsum(graph_data.num_sidechains, dim=0)
+            for src, dst in zip([0,*splits[:-1]], [*splits]):
+                sidechains_list.append(batch_samples[src:dst])
             sidechains_lists.append(sidechains_list)
         return sidechains_lists
 
@@ -136,6 +164,7 @@ class CfomDock(nn.Module):
         interaction_data,
         molecule_sidechain_mask_idx=1,
     ):
+
         combined_memory, memory_padding_mask = self._create_memory(
             smiles_tokens_src, graph_data, interaction_data, molecule_sidechain_mask_idx
         )
