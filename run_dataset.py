@@ -17,6 +17,10 @@ from datasets.samplers import TaskRandomSampler, TaskSequentialSampler
 from datasets.task_data_loader import TaskDataLoader
 torch.multiprocessing.set_sharing_strategy('file_system')
 from torch_geometric.data import Dataset, HeteroData, makedirs, Batch
+
+ds = FsDockDatasetPartitioned('data/fsdock/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
+
+exit()
 def worker_init_fn(worker_id):
     worker_info = torch.utils.data.get_worker_info()
     dataset = worker_info.dataset

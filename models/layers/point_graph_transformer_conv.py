@@ -94,13 +94,8 @@ class PGHTConv(MessagePassing):
         self.norm_input = nn.BatchNorm1d(in_channels)
         self.norm_output = nn.BatchNorm1d(out_channels)
 
-        self.edge_lin = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(), nn.Linear(out_channels, out_channels))
 
-        self.coords_bias_nn = nn.Sequential(nn.Linear(3, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(), nn.Linear(out_channels, out_channels))
-        self.coords_mul_nn = nn.Sequential(nn.Linear(3, out_channels),nn.BatchNorm1d(out_channels), nn.ReLU(),nn.Linear(out_channels, out_channels))
 
-        self.attn_nn = nn.Sequential(nn.Linear(out_channels, num_attn_groups),nn.BatchNorm1d(num_attn_groups), nn.ReLU(),nn.Linear(num_attn_groups, num_attn_groups))
-        self.norm_messages = nn.BatchNorm1d(out_channels)
         self.reset_parameters()
         self.attn_drop = nn.Dropout(dropout)
         
@@ -113,10 +108,6 @@ class PGHTConv(MessagePassing):
         reset(self.q_lin)
         reset(self.v_lin)
         reset(self.out_lin)
-        reset(self.edge_lin) if self.edge_lin else None
-        reset(self.coords_bias_nn)
-        reset(self.coords_mul_nn)
-        reset(self.attn_nn) if not self.attn_nn else None 
 
     def forward(
         self,
@@ -176,7 +167,7 @@ class PGHTConv(MessagePassing):
         q = self.q_lin(v_i_e_v_j)
         v = self.v_lin(v_i_e_v_j)
         
-        weighted_v = self.act(q - k) * v
+        weighted_v = self.attn_drop(self.act(q - k)) * v
         # res = scatter(weighted_v, index, reduce="mean")
         return weighted_v
 

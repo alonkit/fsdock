@@ -27,6 +27,18 @@
         },
 
         {
+            "name": "debug train-fs",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "train-fs.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "SMOL": "1"
+            }
+        },
+
+        {
             "name": "debug dataset",
             "type": "debugpy",
             "request": "launch",

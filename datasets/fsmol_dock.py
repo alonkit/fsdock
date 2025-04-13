@@ -50,13 +50,13 @@ class FsDockDataset(Dataset):
         root,
         tasks: pd.DataFrame,
         transform=None,
-        receptor_radius=10,
+        receptor_radius=15,
         ligand_radius=20,
-        c_alpha_max_neighbors=None,
+        c_alpha_max_neighbors=24,
         remove_hs=False,
         all_atoms=True,
         atom_radius=5,
-        atom_max_neighbors=None,
+        atom_max_neighbors=8,
         knn_only_graph=False,
         num_workers=1,
         tokenizer=None,
@@ -76,7 +76,7 @@ class FsDockDataset(Dataset):
         self.knn_only_graph = knn_only_graph
         self.tasks_file = f"tasks_rh{remove_hs}.pt"
         self.ligands_file = f"ligands.pt"
-        self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
+        self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
         self.saved_ligand_sub_protein_file = f"sub_protein_ligand_edges_lr{ligand_radius}_la{ligand_radius}_"\
             f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.npz"
         self.tokenizer = tokenizer

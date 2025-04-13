@@ -82,13 +82,13 @@ class CfomDockLightning(pl.LightningModule):
             dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv',tokenizer=self.tokenizer, num_workers=torch.get_num_threads())
         else:
             dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=self.tokenizer)
-        dlt = DataLoader(dst, batch_size=2 if self.smol else 20 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
+        dlt = DataLoader(dst, batch_size=2 if self.smol else 25 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
                         worker_init_fn=self.worker_init_fn)
         return dlt
     
     def val_dataloader(self):
         dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=self.tokenizer, only_inactive=True, min_roc_auc=0.70)
-        dlv = DataLoader(dsv, batch_size=32, 
+        dlv = DataLoader(dsv, batch_size=2 if self.smol else 32, 
                 num_workers=torch.get_num_threads()//2, 
                 worker_init_fn=self.worker_init_fn)
         self.validation_clfs=dsv.clfs

@@ -52,20 +52,34 @@ class CfomDock(nn.Module):
         smiles_padding_mask = smiles_padding_mask[:, ~smiles_padding_mask.all(0)]
         return smiles_memory, smiles_padding_mask
 
-    def _get_local_cluster_vecs(self, g, cluster_centers_idxs, c_name, amount):
+    def _get_local_clusters_vecs(self, g, cluster_centers_idxs, c_name, amount):
         edge_index = g['ligand',c_name].edge_index
         edges_with_centers = torch.isin(edge_index[0], cluster_centers_idxs)
-        edge_len = g['ligand'].pos[edge_index[0][edges_with_centers]] - g['ligand'].pos[edge_index[1][edges_with_centers]]
+        edge_len = g['ligand'].pos[edge_index[0][edges_with_centers]] - g[c_name].pos[edge_index[1][edges_with_centers]]
         edge_len = torch.norm(edge_len, dim=1)
         groups = edge_index[0][edges_with_centers]
+        clusters = []
         for idx in cluster_centers_idxs:
             curr_edge_len = edge_len[groups == idx]
-            closest_in_cluster = torch.argsort(curr_edge_len).indices[:amount]
-            print(closest_in_cluster)
-            pass
+            closest_in_cluster = torch.argsort(curr_edge_len)[:amount]
+            idxs = edge_index[1][edges_with_centers][groups == idx][closest_in_cluster]
+            node_vecs = g[c_name].x[idxs]
+            edge_vecs = g['ligand',c_name].edge_attr[edges_with_centers][groups == idx][closest_in_cluster]
+            center_vec = g['ligand'].x[idx].repeat(node_vecs.shape[0],1)
+            cluster = torch.cat([node_vecs, edge_vecs, center_vec], dim=1)
+            if cluster.shape[0] < amount:
+                cluster = torch.cat([cluster, torch.zeros(amount - cluster.shape[0], cluster.shape[1], device=cluster.device)], dim=0)
+            clusters.append(cluster)
+        return clusters
         
-    def _get_local_clusters_vecs(self, graph_data, cluster_centers_idxs):
-        pass
+    def _collect_local_clusters(self, graph_data, cluster_centers_idxs):
+        lig_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'ligand', 10)
+        rec_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'receptor', 30)
+        atom_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'atom', 20)
+        clusters = []
+        for l,r,c in zip(lig_clusters, rec_clusters, atom_clusters):
+            clusters.append(torch.cat([l,r,c], dim=0).unsqueeze(0))
+        return torch.cat(clusters)
         
 
     def _create_graph_memory(self, graph_data, molecule_sidechain_mask_idx):
@@ -81,8 +95,8 @@ class CfomDock(nn.Module):
         masked_graph_data = self.graph_encoder.mask_graph_sidechains(
             graph_data, molecule_sidechain_mask_idx
         )
-        graph_memory = self.graph_encoder(masked_graph_data, keep_hetrograph=True)['ligand'].x
-        graph_memory = graph_memory[neighbor_idxs].unsqueeze(1)
+        encoded_graph = self.graph_encoder(masked_graph_data, keep_hetrograph=True)
+        graph_memory = self._collect_local_clusters(encoded_graph, neighbor_idxs)
         # graph_padding_mask = self.graph_encoder.create_memory_key_padding_mask(
         #     graph_data
         # )

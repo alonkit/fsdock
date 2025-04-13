@@ -1,66 +1,34 @@
+
 import scipy.spatial # very important, does not work without it, i don't know why
-from tokenizers import Tokenizer
-import torch
-from torch_geometric.transforms import ToUndirected
-from torch_geometric.data import collate
+from datetime import datetime
+import numpy as np
+from tqdm import tqdm
+from datasets.custom_distributed_sampler import CustomDistributedSampler, CustomTaskDistributedSampler
 from datasets.fsmol_dock import FsDockDataset
-from datasets.fsmol_dock_clf import FsDockClfDataset
-from models.cfom_dock import CfomDock
-from models.graph_embedder import GraphEmbedder
-from models.graph_encoder import GraphEncoder
-from models.interaction_encoder import InteractionEncoder
-from models.layers.point_graph_transformer_conv import PGHTConv
-import datasets.process_chem.features as features
+from datasets.fsmol_dock import FsDockDataset
 from torch_geometric.loader import DataLoader
 
-from models.transformer import TransformerDecoder, TransformerEncoder
+import torch
+import os.path as osp
 
-tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-ds = FsDockClfDataset('data/fsdock/valid','../docking_cfom/valid_tasks.csv', tokenizer=tokenizer, num_workers=torch.get_num_threads())
-dl = DataLoader(ds, batch_size=4, shuffle=True)
-graph_embedder = GraphEmbedder(
-    distance_embed_dim=16,
-    cross_distance_embed_dim=16,
-    lig_max_radius=5,
-    rec_max_radius=10,
-    cross_max_distance=10,
-    lig_feature_dims=features.lig_feature_dims,
-    lig_edge_feature_dim=4,
-    lig_emb_dim=16,
-    rec_feature_dims=features.rec_residue_feature_dims,
-    atom_feature_dims=features.rec_atom_feature_dims,
-    prot_emd_dim=16,
-    dropout=0.1,
-    lm_embedding_dim=1280,
-)
-graph_encoder = GraphEncoder(
-    in_channels=16,
-    edge_channels=16,
-    hidden_channels=[32, 64, 64],
-    out_channels=128,
-    attention_groups=4,
-    graph_embedder=graph_embedder,
-    dropout=0.1,
-    max_length=128
-)
-smiles_encoder = TransformerEncoder(
-    len(tokenizer.get_vocab()),
-    embedding_dim=128,
-    hidden_size=128,
-    nhead=4,
-    n_layers=2,
-    max_length=128,
-    pad_token=tokenizer.token_to_id("<pad>"),
-)
-sidechain_decoder = TransformerDecoder(len(tokenizer.get_vocab()), embedding_dim=128,
-                                         hidden_size=128, nhead=4,
-                                         n_layers=2, max_length=128, pad_token=tokenizer.token_to_id("<pad>"))
-interaction_encoder = InteractionEncoder(128)
-model = CfomDock(smiles_encoder, sidechain_decoder, interaction_encoder, graph_encoder)
-model.to('cuda')
-for data in dl:
-    data = data['graphs'][0]
-    data = data.to('cuda')
-    y = model(data.core_tokens, data.sidechain_tokens, data, (data.activity_type, data.label))
-    print(y)
+from datasets.fsmol_dock_clf import FsDockClfDataset
+from datasets.partitioned_fsmol_dock import FsDockDatasetPartitioned
+from datasets.samplers import TaskRandomSampler, TaskSequentialSampler
+from datasets.task_data_loader import TaskDataLoader
+torch.multiprocessing.set_sharing_strategy('file_system')
+from torch_geometric.data import Dataset, HeteroData, makedirs, Batch
+def worker_init_fn(worker_id):
+    worker_info = torch.utils.data.get_worker_info()
+    dataset = worker_info.dataset
+    dataset.sub_proteins.open()
+
+    
+ds = FsDockDatasetPartitioned('data/fsdock/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads())
+dl = DataLoader(ds, batch_sampler=CustomTaskDistributedSampler(ds, 20, num_replicas=1, rank=0), 
+                worker_init_fn=worker_init_fn)
+for i,t in enumerate(tqdm(dl)):
+    print(i)
+exit()
+
+
 

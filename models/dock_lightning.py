@@ -107,14 +107,18 @@ class DockLightning(pl.LightningModule):
         la = (la_i - la_j).norm(dim=-1)
         return torch.concat([ll,lr,la], dim=0)
 
-    @staticmethod
-    def hide_sidechains(data):
-        data['ligand'].orig_pos = data['ligand'].pos.clone()
-        for i in range(len(data)):
-            mol = data[i]
-            for i, hole_neighbor in enumerate(mol.hole_neighbors):
-                hole_pos = mol['ligand'].pos[hole_neighbor].clone()
-                mol['ligand'].pos[mol.sidechains_mask == i+1] = hole_pos
+    def hide_sidechains(self, data):
+        orig_pos = data['ligand'].pos.clone()
+        data['ligand'].orig_pos = orig_pos
+        mask = data.sidechains_mask != 0
+        sigma = self.t_to_sigma(self.current_epoch / self.trainer.max_epochs)
+        pos_noise = torch.normal(0,sigma, orig_pos[mask].shape,device=orig_pos.device)
+        data['ligand'].pos[mask] = orig_pos[mask] + pos_noise
+        # for i in range(len(data)):
+        #     mol = data[i]
+        #     for i, hole_neighbor in enumerate(mol.hole_neighbors):
+        #         hole_pos = mol['ligand'].pos[hole_neighbor].clone()
+        #         mol['ligand'].pos[mol.sidechains_mask == i+1] = hole_pos
         return data
 
     def get_loss(self, data):

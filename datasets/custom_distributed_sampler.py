@@ -69,19 +69,36 @@ class CustomDistributedSampler(DistributedSampler):
 
 
 class CustomTaskDistributedSampler(CustomDistributedSampler):
-    def __init__(self, dataset,task_size: int, **kwargs):
+    def __init__(self, dataset,query_size: int, support_size:int, **kwargs):
         super().__init__(dataset, **kwargs)
         self.tasks = defaultdict(list)
-        self.task_size = task_size
+        self.task_size = support_size + query_size
+        self.query_size = query_size
+        self.support_size = support_size
+        self.set_tasks()
+        self.num_tasks = self.num_samples // self.task_size
+    
+    def set_tasks(self):
+        tasks_good = defaultdict(list)
+        tasks_bad = defaultdict(list)
         for task, idx in super().__iter__():
-            self.tasks[task].append(idx)
+            if self.dataset.tasks[task]['labels'][idx] == 1:
+                tasks_good[task].append(idx)
+            else:
+                tasks_bad[task].append(idx)
+        self.tasks = defaultdict(list)
+        for task in tasks_good:
+            for i in range(min(len(tasks_good[task]), len(tasks_bad[task]))):
+                self.tasks[task].append(tasks_good[task][i])
+                self.tasks[task].append(tasks_bad[task][i])
+    
+    def __iter__(self):
+        self.set_tasks()
                     
         self.task_samplers = {}
         for task, idxs in self.tasks.items():
             self.task_samplers[task] = BatchSampler(idxs, self.task_size, drop_last=True)
-        self.num_tasks = self.num_samples // task_size
-        
-    def __iter__(self):
+        self.num_tasks = self.num_samples // self.task_size
         task_iters = None
         i=0
         while i < self.num_tasks:
@@ -91,7 +108,8 @@ class CustomTaskDistributedSampler(CustomDistributedSampler):
                 task = random.choice(list(task_iters.keys()))
                 idxs = next(task_iters[task])
                 i += 1
-                yield list(zip([task]*len(idxs), idxs))
+                task = list(zip([task]*len(idxs), idxs))
+                yield [task[:self.support_size], task[self.support_size:]]
             except StopIteration:
                 del task_iters[task]
     
