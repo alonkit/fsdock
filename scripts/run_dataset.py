@@ -17,31 +17,50 @@ from datasets.samplers import TaskRandomSampler, TaskSequentialSampler
 from datasets.task_data_loader import TaskDataLoader
 torch.multiprocessing.set_sharing_strategy('file_system')
 from torch_geometric.data import Dataset, HeteroData, makedirs, Batch
+
 def worker_init_fn(worker_id):
     worker_info = torch.utils.data.get_worker_info()
     dataset = worker_info.dataset
     dataset.sub_proteins.open()
 
-ds = FsDockDatasetPartitioned('data/fsdock/train','../docking_cfom/train_tasks.csv', num_workers=torch.get_num_threads())
+def make_datasets():
+    ds = FsDockDatasetPartitioned('data/fsdock/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads())
+    ds = FsDockDatasetPartitioned('data/fsdock/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
+    ds = FsDockDatasetPartitioned('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads())
+    ds = FsDockDatasetPartitioned('data/fsdock/smol','data/fsdock/smol_tasks.csv', num_workers=torch.get_num_threads())
+    
+    ds = FsDockClfDataset('data/fsdock/clfs/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7)
+    ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7)
 
-sampler = CustomDistributedSampler(ds, 3, 1, True)
-dlv = DataLoader(ds, batch_size=64, sampler=sampler)
-print(3)
-for t in tqdm(dlv):
-    pass
-print(4)
+    
+def play():
+    dl = DataLoader(ds, batch_size=2, 
+                    shuffle=False,   
+                    # num_workers=torch.get_num_threads(), 
+                    worker_init_fn=worker_init_fn)
+    for i,t in enumerate(tqdm(dl)):
+        print(i)
+    exit()
+    
+if __name__ == "__main__":
+    make_datasets()
 
-exit()
 
-# # # # ds = FsDockDataset('data/fsdock/single','data/single.csv', num_workers=2)
-# # ds = FsDockDataset('data/fsdock/valid','../docking_cfom/valid_tasks.csv', num_workers=torch.get_num_threads())
+# sampler = CustomDistributedSampler(ds, 3, 1, True)
+# dlv = DataLoader(ds, batch_size=64, sampler=sampler)
+# print(3)
+# for t in tqdm(dlv):
+#     pass
+# print(4)
 
+# exit()
+# exit()
 
 # # dl = DataLoader(ds, batch_size=64, 
-# #                 shuffle=True, 
+# #                 shuffle=True,   
 # #                 num_workers=torch.get_num_threads(), 
 # #                 worker_init_fn=worker_init_fn)
-
+#  srun -c 20 python ./run_dataset.py
 # dl = TaskDataLoader(ds, batch_sampler=TaskRandomSampler(ds.task_sizes, 64),
 #                 num_workers=torch.get_num_threads(), 
 #                 worker_init_fn=worker_init_fn)
@@ -63,13 +82,11 @@ exit()
 # for t in tqdm(dlv):
 #     pass     
 # exit()
-ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
-exit()
+# exit()
 
 
-ds = FsDockDataset('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads())
-ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
-ds = FsDockClfDataset('data/fsdock/clfs/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads())
+# ds = FsDockDataset('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads())
+# ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
 
 
 
