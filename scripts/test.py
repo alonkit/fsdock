@@ -47,7 +47,7 @@ def get_model(tokenizer):
         rec_feature_dims=features.rec_residue_feature_dims,
         atom_feature_dims=features.rec_atom_feature_dims,
         prot_emd_dim=48,
-        dropout=0.1,
+        dropout=0.3,
         lm_embedding_dim=1280,
     )
     graph_encoder = GraphEncoder(

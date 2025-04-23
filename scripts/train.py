@@ -46,7 +46,7 @@ def get_model(tokenizer):
         rec_feature_dims=features.rec_residue_feature_dims,
         atom_feature_dims=features.rec_atom_feature_dims,
         prot_emd_dim=48,
-        dropout=0.1,
+        dropout=0.3,
         lm_embedding_dim=1280,
     )
     graph_encoder = GraphEncoder(
@@ -83,25 +83,6 @@ def worker_init_fn(worker_id):
     dataset.sub_proteins.open()   
 
 
-def test_model(path):
-    get_logger().info("Testing model")
-    tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-    model = get_model(tokenizer)
-
-
-    dstest = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.70)
-    dltest = DataLoader(dstest, batch_size=64, 
-                         num_workers=torch.get_num_threads()//2, 
-                        worker_init_fn=worker_init_fn)
-    
-    
-    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=20, test_clfs=dstest.clfs)
-    trainer = pl.Trainer(
-        max_epochs=100, 
-        check_val_every_n_epoch=10,
-        strategy='ddp_find_unused_parameters_true')
-    trainer.test(lit_model, dltest, ckpt_path=path)
-
 def pretrain_model(full_model, wandb_logger,smol):
     model = full_model.graph_encoder
     # wandb_logger.watch(model, log='all')
@@ -118,7 +99,7 @@ def pretrain_model(full_model, wandb_logger,smol):
     trainer = pl.Trainer(
         # num_nodes=2,
         # devices=10,
-        max_epochs=150, 
+        max_epochs=100, 
         callbacks=[checkpoint_callback], 
         check_val_every_n_epoch=10,
         strategy='ddp_find_unused_parameters_true',
@@ -142,9 +123,9 @@ def train_model(smol=False):
     model = get_model(tokenizer)
     
     # load finetuned
-    # load_finedtuned_graph_encoder(model, '/home/alon.kitin/fs-dock/checkpoints/dock_2025-03-08-20_42_37/epoch=89-val_noise_loss=0.01019.ckpt')
+    load_finedtuned_graph_encoder(model, '/home/alon.kitin/fs-dock/checkpoints/dock_2025-04-14-22_58_32/epoch=99-val_noise_loss=0.01746.ckpt')
     #pretrain
-    pretrain_model(model, wandb_logger, smol)
+    # pretrain_model(model, wandb_logger, smol)
 
     # wandb_logger.watch(model, log='all')
 
@@ -162,7 +143,7 @@ def train_model(smol=False):
     trainer = pl.Trainer(
         # num_nodes=2,
         num_sanity_val_steps=2 if smol else 0,
-        devices=1 if smol else 16,
+        devices=1 if smol else 8,
         max_epochs=150, 
         callbacks=[checkpoint_callback], 
         check_val_every_n_epoch=5,

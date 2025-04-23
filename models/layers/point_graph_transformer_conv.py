@@ -86,7 +86,7 @@ class PGHTConv(MessagePassing):
         self.group = group
         self.num_attn_groups = num_attn_groups
         full_edge_in_ch = in_channels*2 + edge_in_channels
-        self.k_lin = nn.Sequential(nn.Linear(full_edge_in_ch, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
+        self.k_lin = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
         self.q_lin = nn.Sequential(nn.Linear(full_edge_in_ch, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
         self.v_lin = Linear(full_edge_in_ch, out_channels)
         self.out_lin = Linear(out_channels, out_channels)
@@ -163,7 +163,7 @@ class PGHTConv(MessagePassing):
                 size_i: Optional[int]) -> Tensor:
         v_i_e_v_j = torch.concat([v_i, e, v_j],dim=-1) # maybe through coords here?
         # dists = (coords_i - coords_j).norm()
-        k = self.k_lin(v_i_e_v_j)
+        k = self.k_lin(v_i)
         q = self.q_lin(v_i_e_v_j)
         v = self.v_lin(v_i_e_v_j)
         

@@ -19,6 +19,8 @@ from torch_geometric.data.dataset import files_exist
 from torch_geometric.nn.pool import radius
 import prody as pr
 from tqdm import tqdm
+from datetime import datetime
+
 from datasets.process_chem.process_mols import (
     get_binding_pockets2,
     get_lig_graph,
@@ -60,6 +62,7 @@ class FsDockDatasetPartitioned(Dataset):
         num_workers=1,
         tokenizer=None,
         load_mols=False,
+        random_max_angle=None,
     ):
         if isinstance(tasks, str):
             tasks = pd.read_csv(tasks)
@@ -78,7 +81,7 @@ class FsDockDatasetPartitioned(Dataset):
         self.ligands_file = f"ligands.pt"
         self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
         self.saved_ligand_sub_protein_file = f"sub_protein_ligand_edges_lr{ligand_radius}_la{ligand_radius}_"\
-            f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.npz"
+            f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.npz"
         self.tokenizer = tokenizer
         self.tasks = {}
         self.load_mols = load_mols
@@ -88,6 +91,7 @@ class FsDockDatasetPartitioned(Dataset):
         metadata = torch.load(osp.join(self.processed_dir, self.tasks_metadata_file))
         self._indices = metadata['indices']
         self.tasks_target = metadata['tasks_target']
+        self.random_max_angle = random_max_angle
         
     def get_partition_and_idxs(self, world_size=None):
         world_size = world_size or torch.distributed.get_world_size()
@@ -175,6 +179,8 @@ class FsDockDatasetPartitioned(Dataset):
             task_name, i = self._indices[idx]
         
         graph = deepcopy(self.tasks[task_name]["graphs"][i])
+        if self.random_max_angle is not None:
+            graph["ligand"].pos = self.rotate_point_cloud(graph["ligand"].pos, self.random_max_angle)
         graph.task = task_name
         graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask).to(torch.int)
         graph.hole_neighbors = torch.tensor(graph.hole_neighbors)
@@ -182,6 +188,33 @@ class FsDockDatasetPartitioned(Dataset):
         graph.num_sidechains = int(graph.num_sidechains)
         self.tokenize_smiles(graph)
         return graph
+
+    def random_small_rotation_matrix(self, max_angle):
+        # Random unit axis
+        axis = torch.randn(3)
+        axis = axis / axis.norm()
+        
+        # Small angle in [-max_angle, max_angle]
+        angle = (torch.rand(1) * 2 - 1) * max_angle
+
+        K = torch.tensor([
+            [0, -axis[2], axis[1]],
+            [axis[2], 0, -axis[0]],
+            [-axis[1], axis[0], 0]
+        ])
+
+        R = torch.eye(3) + torch.sin(angle) * K + (1 - torch.cos(angle)) * (K @ K)
+        return R
+
+    def rotate_point_cloud(self, pc, max_angle):
+        centroid = pc.mean(dim=0)
+        pc_centered = pc - centroid
+
+        R = self.random_small_rotation_matrix(max_angle)
+        pc_rotated = pc_centered @ R.T
+        pc_rotated += centroid
+
+        return pc_rotated
 
     def get_task_metadata(self, task_name):
         task = self.tasks[task_name]
@@ -530,6 +563,7 @@ class FsDockDatasetPartitioned(Dataset):
                     atom_cutoff=self.atom_radius,
                     atom_max_neighbors=self.atom_max_neighbors,
                 )
+                
                 protein_graphs[protein_id] = protein_graph
             with MapFileManager(protein_graph_path, 'w') as mf:
                 for prot_name, prot in protein_graphs.items():
