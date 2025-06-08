@@ -33,7 +33,7 @@ def get_num_fused_rings(mol):
                 num_fused_rings.update([i, j])
     return len(num_fused_rings)
 
-def advanced_murcko_scaffold(mol,chains_weight_threshold=0.):
+def advanced_murcko_scaffold(mol,chains_weight_threshold=0.3):
     num_rings = AllChem.CalcNumRings(mol)
     if num_rings == 0:
         return None
@@ -58,8 +58,8 @@ def advanced_murcko_scaffold(mol,chains_weight_threshold=0.):
         if num_rings != num_cur_frag_rings + num_remained_frag_rings:
             continue
         if (m1_weight - frag_weight) / m1_weight > chains_weight_threshold or num_fused_rings != get_num_fused_rings(cur_frag):
-            clean_core = cur_frag
             break
+        clean_core = cur_frag
     return clean_core
 
 def get_mol_smiles(mol):

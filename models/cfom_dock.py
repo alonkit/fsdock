@@ -97,11 +97,6 @@ class CfomDock(nn.Module):
         )
         encoded_graph = self.graph_encoder(masked_graph_data, keep_hetrograph=True)
         graph_memory = self._collect_local_clusters(encoded_graph, neighbor_idxs)
-        # graph_padding_mask = self.graph_encoder.create_memory_key_padding_mask(
-        #     graph_data
-        # )
-        # graph_memory = graph_memory[:, ~graph_padding_mask.all(0)]
-        # graph_padding_mask = graph_padding_mask[:, ~graph_padding_mask.all(0)]
         return graph_memory, torch.zeros(graph_memory.shape[0], graph_memory.shape[1]).bool().to(graph_memory.device)
 
     def _create_interaction_memory(self, interaction_data, num_sidechains):

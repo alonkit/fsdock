@@ -22,7 +22,6 @@ from datasets.process_chem.process_sidechains import (
     reconstruct_from_core_and_chains,
 )
 from models.cfom_dock import CfomDock
-from models.tasks.task import AtomNumberTask
 from utils.logging_utils import configure_logger, get_logger
 from rdkit import Chem
 
@@ -60,7 +59,7 @@ class CfomDockLightning(pl.LightningModule):
         # self.save_hyperparameters(
         #     ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs", 'side_']
         # )
-        self.name = name or f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
+        self.name = (name or "") + f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
         self.name = f'cfom_dock_{self.name}'
         self.test_result_path = f'test_stats/{self.name}'
         self.smol = smol

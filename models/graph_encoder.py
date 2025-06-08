@@ -46,6 +46,7 @@ class GraphEncoder(torch.nn.Module):
         self.edge_channels = edge_channels
         self.graph_embedder = graph_embedder
         self.max_length = max_length
+        self.in_channels = out_channels
         self.out_channels = out_channels
         
         self.freeze_layers = [graph_embedder, *self.convs ]
