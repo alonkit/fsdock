@@ -29,7 +29,7 @@ from rdkit import Chem
 class CfomDockLightning(pl.LightningModule):
     def __init__(
         self,
-        cfom_dock_model: CfomDock,
+        model: CfomDock,
         tokenizer,
         lr,
         weight_decay,
@@ -40,9 +40,10 @@ class CfomDockLightning(pl.LightningModule):
         gen_meta_params=None,
         name=None,
         smol=True,
+        batch_size=25,
     ):
         super().__init__()
-        self.cfom_dock_model = cfom_dock_model
+        self.model = model
         self.num_gen_samples = num_gen_samples
         self.tokenizer = tokenizer
         if loss is None:
@@ -57,15 +58,16 @@ class CfomDockLightning(pl.LightningModule):
         self.similarity_threshold = similarity_threshold
         self.gen_meta_params = gen_meta_params or {"p":1.}
         # self.save_hyperparameters(
-        #     ignore=["cfom_dock_model", "loss", "tokenizer", "validation_clfs", "test_clfs", 'side_']
+        #     ignore=["model", "loss", "tokenizer", "validation_clfs", "test_clfs", 'side_']
         # )
         self.name = (name or "") + f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
         self.name = f'cfom_dock_{self.name}'
         self.test_result_path = f'test_stats/{self.name}'
         self.smol = smol
-        self.freeze_layers = self.cfom_dock_model.freeze_layers
+        self.freeze_layers = self.model.freeze_layers
         self.unfreeze_start = 4
         self.unfreeze_step = 2
+        self.batch_size = batch_size
 
     @staticmethod
     def worker_init_fn(worker_id):
@@ -76,22 +78,22 @@ class CfomDockLightning(pl.LightningModule):
     def _reset_eval_step_outputs(self):
         self.eval_step_outputs = defaultdict(lambda: defaultdict(list))
     
-    def train_dataloader(self):
-        if self.smol:
-            dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv',tokenizer=self.tokenizer, num_workers=torch.get_num_threads())
-        else:
-            dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=self.tokenizer, random_max_angle=1)
-        dlt = DataLoader(dst, batch_size=2 if self.smol else 25 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
-                        worker_init_fn=self.worker_init_fn)
-        return dlt
+    # def train_dataloader(self):
+    #     if self.smol:
+    #         dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv',tokenizer=self.tokenizer, num_workers=torch.get_num_threads())
+    #     else:
+    #         dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=self.tokenizer, random_max_angle=1)
+    #     dlt = DataLoader(dst, batch_size=self.batch_size , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
+    #                     worker_init_fn=self.worker_init_fn)
+    #     return dlt
     
-    def val_dataloader(self):
-        dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=self.tokenizer, only_inactive=True, min_roc_auc=0.70)
-        dlv = DataLoader(dsv, batch_size=2 if self.smol else 32, 
-                num_workers=torch.get_num_threads()//2, 
-                worker_init_fn=self.worker_init_fn)
-        self.validation_clfs=dsv.clfs
-        return dlv
+    # def val_dataloader(self):
+    #     dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=self.tokenizer, only_inactive=True, min_roc_auc=0.70)
+    #     dlv = DataLoader(dsv, batch_size=2 if self.smol else 32, 
+    #             num_workers=torch.get_num_threads()//2, 
+    #             worker_init_fn=self.worker_init_fn)
+    #     self.validation_clfs=dsv.clfs
+    #     return dlv
     
     def t_to_sigma(self, t):
         return 0.05 ** (1-min(t,1)) * 0.2 ** t
@@ -101,7 +103,7 @@ class CfomDockLightning(pl.LightningModule):
         return t * 0.9 + (1-t)*0.5
     
     def get_loss(self,data):
-        logits = self.cfom_dock_model(
+        logits = self.model(
             data.core_tokens,
             data.split_sidechain_tokens[:, :-1],
             data,
@@ -151,7 +153,7 @@ class CfomDockLightning(pl.LightningModule):
             
             
     def generate_samples(self, data):
-        sidechains_lists = self.cfom_dock_model.generate_samples(
+        sidechains_lists = self.model.generate_samples(
             self.num_gen_samples*3,
             data.core_tokens,
             data.core_smiles,

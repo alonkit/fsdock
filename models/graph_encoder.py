@@ -24,7 +24,7 @@ class GraphEncoder(torch.nn.Module):
         max_length=128,
     ):
 
-        assert isinstance(hidden_channels, list) or num_layers, "Either hidden_channels is a list or num_layers must be provided"
+        assert (not isinstance(hidden_channels, int)) or num_layers, "Either hidden_channels is a list or num_layers must be provided"
         if isinstance(hidden_channels, int):
             hidden_channels = [hidden_channels] * (num_layers - 1)
         nodes = nodes or ['ligand', 'receptor', 'atom']

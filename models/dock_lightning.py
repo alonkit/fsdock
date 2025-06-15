@@ -53,21 +53,21 @@ class DockLightning(pl.LightningModule):
         dataset = worker_info.dataset
         dataset.sub_proteins.open()
     
-    def train_dataloader(self):
-        if self.smol:
-            dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv', num_workers=torch.get_num_threads())
-        else:
-            dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv")
-        dlt = DataLoader(dst, batch_size=2 if self.smol else 24 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
-                        worker_init_fn=self.worker_init_fn)
-        return dlt
+    # def train_dataloader(self):
+    #     if self.smol:
+    #         dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv', num_workers=torch.get_num_threads())
+    #     else:
+    #         dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv")
+    #     dlt = DataLoader(dst, batch_size=2 if self.smol else 24 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
+    #                     worker_init_fn=self.worker_init_fn)
+    #     return dlt
     
-    def val_dataloader(self):
-        dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv", min_roc_auc=0.7)
-        dlv = DataLoader(dsv, batch_size=24, 
-                num_workers=torch.get_num_threads()//2, 
-                worker_init_fn=self.worker_init_fn)
-        return dlv
+    # def val_dataloader(self):
+    #     dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv", min_roc_auc=0.7)
+    #     dlv = DataLoader(dsv, batch_size=24, 
+    #             num_workers=torch.get_num_threads()//2, 
+    #             worker_init_fn=self.worker_init_fn)
+    #     return dlv
     
     def t_to_sigma(self, t):
         return 0.05 ** (1-min(t,1)) * self.max_noise_scale ** t
