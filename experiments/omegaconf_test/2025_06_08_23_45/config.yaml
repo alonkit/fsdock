@@ -1,0 +1,11 @@
+metadata:
+  name: omegaconf_test
+  description: This file contains the configuration settings for the application.
+  version: 1.0.0
+  experiment_folder: experiments/omegaconf_test/2025_06_08_23_45
+  date: '2025_06_08_23_45'
+experiment:
+  cats: 1
+  dogs:
+  - 1
+  - 2
