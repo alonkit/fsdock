@@ -23,14 +23,14 @@ def worker_init_fn(worker_id):
     dataset = worker_info.dataset
     dataset.sub_proteins.open()
 
-def make_datasets():
-    # ds = FsDockDatasetPartitioned('data/fsdock/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads())
-    # ds = FsDockDatasetPartitioned('data/fsdock/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads())
-    # ds = FsDockDatasetPartitioned('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads())
-    # ds = FsDockDatasetPartitioned('data/fsdock/smol','data/fsdock/smol_tasks.csv', num_workers=torch.get_num_threads())
+def make_datasets(core_weight):
+    ds = FsDockDatasetPartitioned('data/fsdock/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    ds = FsDockDatasetPartitioned('data/fsdock/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    ds = FsDockDatasetPartitioned('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    ds = FsDockDatasetPartitioned('data/fsdock/smol','data/fsdock/smol_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
     
-    # ds = FsDockClfDataset('data/fsdock/clfs/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7)
-    ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7)
+    ds = FsDockClfDataset('data/fsdock/clfs/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7, core_weight=core_weight)
+    ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7, core_weight=core_weight)
 
     
 def play():
@@ -43,7 +43,9 @@ def play():
     exit()
     
 if __name__ == "__main__":
-    make_datasets()
+    make_datasets(0.7)
+    make_datasets(0.5)
+    make_datasets(0.3)
 
 
 # sampler = CustomDistributedSampler(ds, 3, 1, True)
