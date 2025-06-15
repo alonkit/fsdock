@@ -17,4 +17,4 @@ checkpoints/
 wandb/
 __pycache__/
 test_stats/*
-expriments/
+expriments/*
