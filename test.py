@@ -4,9 +4,9 @@ import resource
 
 from datasets.custom_distributed_sampler import CustomDistributedSampler, CustomTaskDistributedSampler
 from datasets.partitioned_fsmol_dock import FsDockDatasetPartitioned
+from models.cfom_dock_ablation import CfomDockAblation
 from models.dock_lightning import DockLightning
 from models.fs_dock_lightning import FSDockLightning
-from models.tasks.task import AtomNumberTask, LabelTask
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
@@ -33,6 +33,8 @@ from utils.logging_utils import get_logger
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 torch.manual_seed(0)
+
+ABLATION = True
 
 def get_model(tokenizer):
     graph_embedder = GraphEmbedder(
@@ -75,7 +77,11 @@ def get_model(tokenizer):
                                             start_token=tokenizer.token_to_id("<bos>"),
                                             end_token=tokenizer.token_to_id("<eos>"))
     interaction_encoder = InteractionEncoder(304)
-    model = CfomDock(None, sidechain_decoder, interaction_encoder, graph_encoder)
+    if ABLATION:
+        model = CfomDockAblation(None, sidechain_decoder, interaction_encoder, graph_encoder)
+    else:
+        model = CfomDock(None, sidechain_decoder, interaction_encoder, graph_encoder)
+        
     return model
 
 def worker_init_fn(worker_id):
@@ -96,7 +102,7 @@ def test_model(path):
                         worker_init_fn=worker_init_fn)
     
     
-    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=20, test_clfs=dstest.clfs)
+    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=20, test_clfs=dstest.clfs,name="no_bindings" if ABLATION else "")
     trainer = pl.Trainer(
         max_epochs=100, 
         check_val_every_n_epoch=10,

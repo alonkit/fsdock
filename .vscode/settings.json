@@ -1,4 +1,7 @@
 {
     "csv-preview.numberFormat": "g4",
-    "csv-preview.formatValues": "never"
+    "csv-preview.formatValues": "never",
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python-envs.pythonProjects": []
 }

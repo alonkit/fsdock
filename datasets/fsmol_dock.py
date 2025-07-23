@@ -61,6 +61,8 @@ class FsDockDataset(Dataset):
         num_workers=1,
         tokenizer=None,
         load_mols=False,
+        core_weight=0.5,
+        random_max_angle=None,
     ):
         if isinstance(tasks, str):
             tasks = pd.read_csv(tasks)
@@ -74,20 +76,49 @@ class FsDockDataset(Dataset):
         self.ligand_radius = ligand_radius
         self.atom_radius, self.atom_max_neighbors = atom_radius, atom_max_neighbors
         self.knn_only_graph = knn_only_graph
-        self.tasks_file = f"tasks_rh{remove_hs}.pt"
-        self.ligands_file = f"ligands.pt"
+        self.core_weight = core_weight
+        self.tasks_file = f"tasks_rh{remove_hs}_cw{core_weight}.pt"
+        self.ligands_file = f"ligands_cw{core_weight}.pt"
         self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
         self.saved_ligand_sub_protein_file = f"sub_protein_ligand_edges_lr{ligand_radius}_la{ligand_radius}_"\
-            f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.npz"
+            f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}_rh{remove_hs}_cw{core_weight}.npz"
         self.tokenizer = tokenizer
         self.tasks = {}
+        self.random_max_angle = random_max_angle
         self.load_mols = load_mols
         super().__init__(root, transform)
         if not hasattr(self, "protein_graphs"):
             self.load()
         self.task_sizes = {k: len(v["graphs"]) for k, v in self.tasks.items()}
         self._indices = self.get_indices()
+    
 
+    def random_small_rotation_matrix(self, max_angle):
+        # Random unit axis
+        axis = torch.randn(3)
+        axis = axis / axis.norm()
+        
+        # Small angle in [-max_angle, max_angle]
+        angle = (torch.rand(1) * 2 - 1) * max_angle
+
+        K = torch.tensor([
+            [0, -axis[2], axis[1]],
+            [axis[2], 0, -axis[0]],
+            [-axis[1], axis[0], 0]
+        ])
+
+        R = torch.eye(3) + torch.sin(angle) * K + (1 - torch.cos(angle)) * (K @ K)
+        return R
+
+    def rotate_point_cloud(self, pc, max_angle):
+        centroid = pc.mean(dim=0)
+        pc_centered = pc - centroid
+
+        R = self.random_small_rotation_matrix(max_angle)
+        pc_rotated = pc_centered @ R.T
+        pc_rotated += centroid
+
+        return pc_rotated
 
     def get_indices(self):
         split_indexes = []
@@ -160,6 +191,8 @@ class FsDockDataset(Dataset):
             task_name, i = self._indices[idx]
         
         graph = deepcopy(self.tasks[task_name]["graphs"][i])
+        if self.random_max_angle is not None:
+            graph["ligand"].pos = self.rotate_point_cloud(graph["ligand"].pos, self.random_max_angle)
         graph.task = task_name
         graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask).to(torch.int)
         graph.hole_neighbors = torch.tensor(graph.hole_neighbors)
@@ -231,7 +264,7 @@ class FsDockDataset(Dataset):
         for assay_id, grouped_rows in task_groups:
             tasks_size[assay_id] = len(grouped_rows)
             for idx, (_, row) in enumerate(grouped_rows.iterrows()):
-                ligand_build_params.append((assay_id, idx, row["ligand_path"]))
+                ligand_build_params.append((assay_id, idx, row["ligand_path"], self.core_weight))
         ligands = {k: [None] * v for k, v in tasks_size.items()}
         with tqdm(total=len(ligand_build_params), desc="build ligands") as progress_bar:
             with torch.multiprocessing.Pool(self.num_workers) as pool:
@@ -247,7 +280,7 @@ class FsDockDataset(Dataset):
     def process_ligand(args):
         res = {}
         try:
-            task_name, idx, ligand_path = args
+            task_name, idx, ligand_path, core_weight = args
             ligand = read_molecule(ligand_path, sanitize=True)
             if ligand is None:
                 return task_name, idx, res
@@ -255,7 +288,7 @@ class FsDockDataset(Dataset):
             res['ligand']=ligand
             res['smiles']=smiles
             core, core_smiles, sidechains, sidechains_smiles, hole_neighbors = get_core_and_chains(
-                ligand
+                ligand, core_weight
             )
             if core is None:
                 get_logger().warning(

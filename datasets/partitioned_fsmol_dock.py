@@ -63,6 +63,7 @@ class FsDockDatasetPartitioned(Dataset):
         tokenizer=None,
         load_mols=False,
         random_max_angle=None,
+        core_weight=0.5,
     ):
         if isinstance(tasks, str):
             tasks = pd.read_csv(tasks)
@@ -76,12 +77,13 @@ class FsDockDatasetPartitioned(Dataset):
         self.ligand_radius = ligand_radius
         self.atom_radius, self.atom_max_neighbors = atom_radius, atom_max_neighbors
         self.knn_only_graph = knn_only_graph
-        self.tasks_file = f"tasks_rh{remove_hs}.pt"
-        self.tasks_metadata_file  = f"tasks_metadata_rh{remove_hs}.pt"
-        self.ligands_file = f"ligands.pt"
+        self.core_weight = core_weight
+        self.tasks_file = f"tasks_rh{remove_hs}_cw{core_weight}.pt"
+        self.tasks_metadata_file  = f"tasks_metadata_rh{remove_hs}_cw{core_weight}.pt"
+        self.ligands_file = f"ligands_cw{core_weight}.pt"
         self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
         self.saved_ligand_sub_protein_file = f"sub_protein_ligand_edges_lr{ligand_radius}_la{ligand_radius}_"\
-            f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.npz"
+            f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}_rh{remove_hs}_cw{core_weight}.npz"
         self.tokenizer = tokenizer
         self.tasks = {}
         self.load_mols = load_mols
@@ -249,10 +251,13 @@ class FsDockDatasetPartitioned(Dataset):
         
         targets = set(targets)
         tasks = [task for task, target in self.tasks_target.items() if (target in targets or len(targets) == 0)]
+        self.logger.info("started load ligands")
         with MapFileManager(osp.join(self.processed_dir, self.ligands_file),'r')as mf:
             self.ligands = {task:mf[task] for task in tasks}
+        self.logger.info("started load tasks")
         with MapFileManager(osp.join(self.processed_dir, self.tasks_file),'r') as mf:
             self.tasks = {task:mf[task] for task in tasks}
+        self.logger.info("started load prots")
         with MapFileManager(osp.join(self.processed_dir, self.saved_protein_graph_file),'r') as mf:
             if len(targets):
                 self.protein_graphs = {target:mf[target] for target in targets}
@@ -292,7 +297,7 @@ class FsDockDatasetPartitioned(Dataset):
         for assay_id, grouped_rows in task_groups:
             tasks_size[assay_id] = len(grouped_rows)
             for idx, (_, row) in enumerate(grouped_rows.iterrows()):
-                ligand_build_params.append((assay_id, idx, row["ligand_path"]))
+                ligand_build_params.append((assay_id, idx, row["ligand_path"], self.core_weight))
         ligands = {k: [None] * v for k, v in tasks_size.items()}
         with tqdm(total=len(ligand_build_params), desc="build ligands") as progress_bar:
             with torch.multiprocessing.Pool(self.num_workers) as pool:
@@ -310,15 +315,15 @@ class FsDockDatasetPartitioned(Dataset):
     def process_ligand(args):
         res = {}
         try:
-            task_name, idx, ligand_path = args
+            task_name, idx, ligand_path, core_weight = args
             ligand = read_molecule(ligand_path, sanitize=True)
             if ligand is None:
                 return task_name, idx, res
             smiles = get_mol_smiles(ligand)
             res['ligand']=ligand
             res['smiles']=smiles
-            core, core_smiles, sidechains, sidechains_smiles,hole_neighbors = get_core_and_chains(
-                ligand
+            core, core_smiles, sidechains, sidechains_smiles, hole_neighbors = get_core_and_chains(
+                ligand, core_weight
             )
             if core is None:
                 get_logger().warning(

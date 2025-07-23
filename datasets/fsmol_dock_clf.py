@@ -114,7 +114,7 @@ class FsDockClfDataset(FsDockDataset):
     def process_ligand(args):
         res = {}
         try:
-            task_name, idx, ligand_path = args
+            task_name, idx, ligand_path, core_weight = args
             ligand = read_molecule(ligand_path, sanitize=True)
             if ligand is None:
                 return task_name, idx, res
@@ -122,7 +122,7 @@ class FsDockClfDataset(FsDockDataset):
             res['ligand']=ligand
             res['smiles']=smiles
             core, core_smiles, sidechains, sidechains_smiles, hole_neighbors = get_core_and_chains(
-                ligand
+                ligand, core_weight
             )
             if core is None:
                 core_smiles, hole_neighbors = add_attachment_points(ligand, 2)

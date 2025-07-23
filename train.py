@@ -3,9 +3,9 @@ import resource
 
 from datasets.custom_distributed_sampler import CustomDistributedSampler, CustomTaskDistributedSampler
 from datasets.partitioned_fsmol_dock import FsDockDatasetPartitioned
+from models.cfom_dock_ablation import CfomDockAblation
 from models.dock_lightning import DockLightning
 from models.fs_dock_lightning import FSDockLightning
-from models.tasks.task import AtomNumberTask, LabelTask
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 
@@ -32,6 +32,8 @@ from utils.logging_utils import get_logger
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 torch.manual_seed(0)
+
+ABLATION = True
 
 def get_model(tokenizer):
     graph_embedder = GraphEmbedder(
@@ -74,7 +76,11 @@ def get_model(tokenizer):
                                             start_token=tokenizer.token_to_id("<bos>"),
                                             end_token=tokenizer.token_to_id("<eos>"))
     interaction_encoder = InteractionEncoder(304)
-    model = CfomDock(None, sidechain_decoder, interaction_encoder, graph_encoder)
+    if ABLATION:
+        model = CfomDockAblation(None, sidechain_decoder, interaction_encoder, graph_encoder)
+    else:
+        model = CfomDock(None, sidechain_decoder, interaction_encoder, graph_encoder)
+        
     return model
 
 def worker_init_fn(worker_id):
@@ -117,7 +123,7 @@ def load_finedtuned_graph_encoder(full_model, path):
     dock_lit_model = DockLightning.load_from_checkpoint(path, graph_encoder_model=model, lr=1e-4, weight_decay=1e-4)
 
 def train_model(smol=False):
-    wandb_logger = WandbLogger(project="CfomDockLightning", offline=smol)
+    wandb_logger = WandbLogger(project="CfomDockLightning" + ("no_bindings" if ABLATION else ""), offline=smol)
 
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
     model = get_model(tokenizer)
@@ -130,7 +136,7 @@ def train_model(smol=False):
     # wandb_logger.watch(model, log='all')
 
     
-    cfom_dock_lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, smol=smol)
+    cfom_dock_lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, smol=smol, name="no_bindings" if ABLATION else "")
     # cfom_dock_lit_model = CfomDockLightning.load_from_checkpoint('checkpoints/cfom_dock_2025-02-14-21_05_43/epoch=54-validation_avg_success=0.22468.ckpt',cfom_dock_model=model, tokenizer=tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, smol=smol)
     
     checkpoint_callback = ModelCheckpoint(
@@ -159,51 +165,6 @@ def train_model(smol=False):
     #                      num_workers=torch.get_num_threads()//2, 
     #                     worker_init_fn=worker_init_fn)
     # trainer.test(cfom_dock_lit_model, dltest, ckpt_path="best")
-
-    
-def train_fs_model(smol=False):
-    wandb_logger = WandbLogger(project="FsDockLightning", offline=smol)
-
-    tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
-    model = get_model(tokenizer)
-    
-    # load finetuned
-    load_finedtuned_graph_encoder(model, '/home/alon.kitin/fs-dock/checkpoints/dock_2025-02-17-19_55_19/epoch=199-val_noise_loss=0.01078.ckpt')
-    #pretrain
-    # pretrain_model(model, wandb_logger, smol)
-    model = model.graph_encoder
-    wandb_logger.watch(model, log='all')
-
-    
-    fs_dock_lit_model = FSDockLightning(model, lr=1e-4, weight_decay=1e-4, num_examples=10, smol=smol)
-    # cfom_dock_lit_model = CfomDockLightning.load_from_checkpoint('checkpoints/cfom_dock_2025-02-14-21_05_43/epoch=54-validation_avg_success=0.22468.ckpt',cfom_dock_model=model, tokenizer=tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, smol=smol)
-    
-    checkpoint_callback = ModelCheckpoint(
-        save_top_k=10,
-        monitor="val_roc_auc",
-        mode="max",
-        dirpath=f"checkpoints/{fs_dock_lit_model.name}/",
-        filename= "{epoch:02d}-{validation_avg_success:.5f}",
-    )
-    trainer = pl.Trainer(
-        # num_nodes=2,
-        num_sanity_val_steps=0,
-        # devices=1 if smol else 16,
-        max_epochs=150, 
-        callbacks=[checkpoint_callback], 
-        # check_val_every_n_epoch=5,
-        strategy='ddp_find_unused_parameters_true',
-        logger=wandb_logger)
-    # tuner = Tuner(trainer)
-    # tuner.scale_batch_size(lit_model, mode="binsearch")
-    trainer.fit(fs_dock_lit_model)
-    
-    wandb_logger.experiment.unwatch(model)
-    # dstest = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
-    # dltest = DataLoader(dstest, batch_size=64, 
-    #                      num_workers=torch.get_num_threads()//2, 
-    #                     worker_init_fn=worker_init_fn)
-    # trainer.test(fs_dock_lit_model, dltest, ckpt_path="best")
 
 
 if __name__ == "__main__":

@@ -64,7 +64,6 @@ class PGHTConv(MessagePassing):
         in_channels: Union[int, Dict[str, int]],
         edge_in_channels: Union[int, Dict[str, int]],
         out_channels: int,
-        metadata: Metadata = None,
         group: str = "sum",
         num_attn_groups: int = 2,
         dropout = 0.1,
@@ -73,12 +72,6 @@ class PGHTConv(MessagePassing):
         super().__init__(aggr='add', node_dim=0, **kwargs)
 
         assert out_channels % num_attn_groups == 0 , 'out_channels must be divisible by num_attn_groups'
-        metadata = [('node',),(('node', 'edge', 'node'),)] 
-        # if not isinstance(in_channels, dict):
-        #     in_channels = {node_type: in_channels for node_type in metadata[0]}
-
-        # if not isinstance(edge_in_channels, dict):
-        #     edge_in_channels = {edge_type: edge_in_channels for edge_type in metadata[1]}
 
         self.in_channels = in_channels
         self.edge_in_channels = edge_in_channels
@@ -89,6 +82,7 @@ class PGHTConv(MessagePassing):
         self.k_lin = nn.Sequential(nn.Linear(in_channels, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
         self.q_lin = nn.Sequential(nn.Linear(full_edge_in_ch, out_channels),nn.BatchNorm1d(out_channels,affine=False), nn.ReLU())
         self.v_lin = Linear(full_edge_in_ch, out_channels)
+
         self.out_lin = Linear(out_channels, out_channels)
         self.identity_lin = Linear(in_channels, out_channels) if in_channels != out_channels else None
         self.norm_input = nn.BatchNorm1d(in_channels)
@@ -133,9 +127,7 @@ class PGHTConv(MessagePassing):
         """
 
         node_attr = self.norm_input(node_attr)
-        # k = self.k_lin['node'](x)
-        # q = self.q_lin['node'](x)
-        # v = self.v_lin['node'](x)
+
         # propagate_type: (v: Tensor, coords: Tensor, e: Tensor)
         out = self.propagate(
                 edge_index,
@@ -166,7 +158,6 @@ class PGHTConv(MessagePassing):
         k = self.k_lin(v_i)
         q = self.q_lin(v_i_e_v_j)
         v = self.v_lin(v_i_e_v_j)
-        
         weighted_v = self.attn_drop(self.act(q - k)) * v
         # res = scatter(weighted_v, index, reduce="mean")
         return weighted_v

@@ -1,8 +1,5 @@
-from collections import defaultdict
 import torch
-from torch_cluster import radius_graph, radius
-from torch_geometric.nn import GCNConv
-
+from rdkit import Chem
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -14,12 +11,16 @@ class CfomDock(nn.Module):
         transformer_decoder,
         interaction_encoder,
         graph_encoder,
+        add_hole_heighbours=False,
+        use_receptors=True
     ):
         super(CfomDock, self).__init__()
+        self.add_hole_heighbours = add_hole_heighbours
         self.text_encoder = transformer_encoder
         self.graph_encoder = graph_encoder
         self.decoder = transformer_decoder
         self.interaction_encoder = interaction_encoder
+        self.use_receptors = use_receptors
         # self.linear = nn.Linear(num_gnn_features, d_model)
         if self.graph_encoder is not None:
             self.freeze_layers = [*self.graph_encoder.freeze_layers, [self.text_encoder, self.interaction_encoder]]
@@ -73,6 +74,10 @@ class CfomDock(nn.Module):
         return clusters
         
     def _collect_local_clusters(self, graph_data, cluster_centers_idxs):
+        if not self.add_hole_heighbours:
+            clusters = graph_data['ligand'].x[cluster_centers_idxs]
+            return clusters.unsqueeze(1)
+
         lig_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'ligand', 10)
         rec_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'receptor', 30)
         atom_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'atom', 20)
@@ -86,6 +91,12 @@ class CfomDock(nn.Module):
         if self.graph_encoder is None:
             return None, None
 
+        if not self.use_receptors:
+            del graph_data['receptor']
+            del graph_data['receptor','receptor']
+            del graph_data['atom','receptor']
+            del graph_data['ligand','receptor']
+
         neighbor_idxs = graph_data.hole_neighbors + graph_data["ligand"].ptr[
             :-1
         ].repeat_interleave(graph_data.num_sidechains)
@@ -97,11 +108,6 @@ class CfomDock(nn.Module):
         )
         encoded_graph = self.graph_encoder(masked_graph_data, keep_hetrograph=True)
         graph_memory = self._collect_local_clusters(encoded_graph, neighbor_idxs)
-        # graph_padding_mask = self.graph_encoder.create_memory_key_padding_mask(
-        #     graph_data
-        # )
-        # graph_memory = graph_memory[:, ~graph_padding_mask.all(0)]
-        # graph_padding_mask = graph_padding_mask[:, ~graph_padding_mask.all(0)]
         return graph_memory, torch.zeros(graph_memory.shape[0], graph_memory.shape[1]).bool().to(graph_memory.device)
 
     def _create_interaction_memory(self, interaction_data, num_sidechains):
@@ -149,15 +155,14 @@ class CfomDock(nn.Module):
     def generate_samples(
         self,
         num_samples,
-        smiles_tokens_src,
-        smiles_src,
         graph_data,
         interaction_data,
         molecule_sidechain_mask_idx=1,
         **kwargs
     ):
+        core_tokens = graph_data.core_tokens
         combined_memory, memory_padding_mask = self._create_memory(
-            smiles_tokens_src, graph_data, interaction_data, molecule_sidechain_mask_idx
+            core_tokens, graph_data, interaction_data, molecule_sidechain_mask_idx
         )
         sidechains_lists = []
         for i in range(num_samples):
@@ -169,6 +174,43 @@ class CfomDock(nn.Module):
                 sidechains_list.append(batch_samples[src:dst])
             sidechains_lists.append(sidechains_list)
         return sidechains_lists
+
+    def optimized_generate_samples(
+        self,
+        num_samples,
+        graph_data,
+        interaction_data,
+        tokenizer,
+        molecule_sidechain_mask_idx=1,
+        **kwargs
+    ):
+        core_tokens = graph_data.core_tokens
+        combined_memory, memory_padding_mask = self._create_memory(
+            core_tokens, graph_data, interaction_data, molecule_sidechain_mask_idx
+        )
+        sidechains_batches = []
+        error_rate = 0
+        for i in range(combined_memory.shape[0]):
+            chains = []
+            while len(chains) < num_samples:
+                n = (num_samples - len(chains)) * (1 // (1.001 - error_rate))
+                n = max(1,int(n * 1.2)) # increase the number of samples to account for errors
+                memory = combined_memory[i].repeat(num_samples, 1,1)
+                mask = memory_padding_mask[i].repeat(num_samples, 1)
+                batch_samples = self.decoder.generate(memory, mask, **kwargs).cpu().numpy()
+                gen_chains = tokenizer.decode_batch(batch_samples, skip_special_tokens=True)
+                good_chains = [c for c in gen_chains if Chem.MolFromSmiles(f'[1*]{c}') is not None]
+                error_rate = error_rate*0.9+  (1- len(good_chains) / len(gen_chains)) *0.1
+                chains.extend(good_chains)
+                if len(good_chains) == 0:
+                    break
+            sidechains_batches.append(chains[:num_samples]) 
+        
+        mols_sidechains_batches = []
+        splits = torch.cumsum(graph_data.num_sidechains, dim=0)
+        for src, dst in zip([0,*splits[:-1]], [*splits]):
+            mols_sidechains_batches.append(sidechains_batches[src:dst])
+        return mols_sidechains_batches        
 
     def forward(
         self,

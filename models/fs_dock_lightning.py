@@ -26,7 +26,6 @@ from datasets.process_chem.process_sidechains import (
 )
 from models.cfom_dock import CfomDock
 from models.graph_encoder import GraphEncoder
-from models.tasks.task import AtomNumberTask
 from utils.logging_utils import configure_logger, get_logger
 from rdkit import Chem
 from torchmetrics import ROC, AUROC
