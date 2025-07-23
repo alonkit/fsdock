@@ -1,3 +1,4 @@
+from collections import defaultdict
 import numpy as np
 import random
 from rdkit import Chem, DataStructs
@@ -14,6 +15,7 @@ except:
     import logging
     def get_logger():
         return logging.getLogger(__name__)
+from rdkit.Chem import rdmolops
 
 '''
 very important:
@@ -32,54 +34,69 @@ def get_num_fused_rings(mol):
                 num_fused_rings.update([i, j])
     return len(num_fused_rings)
 
-def advanced_murcko_scaffold(mol,chains_weight_threshold=0.):
-    num_rings = AllChem.CalcNumRings(mol)
-    if num_rings == 0:
-        return None
-    num_fused_rings = get_num_fused_rings(mol)
-    frags = sg.tree_frags_from_mol(mol)
-    clean_core = None
-    m1_weight = AllChem.CalcExactMolWt(mol)
-    for i, cur_frag in enumerate(frags):
+
+
+def tree_frags_from_mol(mol, weight_ratio=0.5):
+    scaffold = sg.core.Scaffold(sg.core.fragment.get_murcko_scaffold(mol))
+    rdmolops.RemoveStereochemistry(scaffold.mol)
+    parents = [scaffold]
+    # fragmenter = sg.core.MurckoRingFragmenter(use_scheme_4=True)
+    fragmenter = sg.core.MurckoRingSystemFragmenter()
+    minimal_core_weight = AllChem.CalcExactMolWt(mol) * weight_ratio 
+    rules = sg.prioritization.original_ruleset
+    original_rings_count = scaffold.rings.count
+
+    def _next_scaffold(child):
+        next_parents = [p for p in fragmenter.fragment(child) if (p and AllChem.CalcExactMolWt(p.mol)> minimal_core_weight)]
+        if not next_parents:
+            return
+        next_parent = rules(child, next_parents)
+        parents.append(next_parent)
+        if next_parent.rings.count > 1:
+            _next_scaffold(next_parent)
+    try:
+        _next_scaffold(scaffold)
+    except Exception as e:
+        logger.error(f"Error in tree_frags_from_mol: {e}, {Chem.MolToSmiles(mol)}")
         
+    for p in reversed(parents):
         try:
-            # Chem.SanitizeMol(cur_frag)
-            cur_frag = Chem.MolFromSmiles(Chem.MolToSmiles(cur_frag))
-            frag_weight = AllChem.CalcExactMolWt(cur_frag)
-        except:
-            logger.warning(f"Failed to sanitize fragment {i}, skipping")
+            sidechains = Chem.ReplaceCore(mol, p.mol)
+            Chem.SanitizeMol(sidechains)
+            if original_rings_count == sidechains.GetRingInfo().NumRings() + p.rings.count:
+                return p.mol
+        except Exception as e:
+            logger.error(f"Error processing scaffold {p.smiles}: {e}")
             continue
-        if (m1_weight - frag_weight) / m1_weight > chains_weight_threshold or num_fused_rings != get_num_fused_rings(cur_frag):
-            clean_core = cur_frag
-            break
-    return clean_core
+    return None
 
 def get_mol_smiles(mol):
     if isinstance(mol,str):
         return Chem.CanonSmiles(mol)
     return Chem.MolToSmiles(mol)
 
-def get_core_and_chains(m1):
+def get_core_and_chains(m1,core_weight):
+    error = [None] * 5
     if  isinstance(m1,str):
         m1 = Chem.MolFromSmiles(m1)
     if m1 is None:
-        return None, None, None, None
+        return error
     for a in m1.GetAtoms():
         a.SetIntProp("__origIdx", a.GetIdx())
     # clean_core = MurckoScaffold.GetScaffoldForMol(m1)
-    clean_core = advanced_murcko_scaffold(m1)
+    clean_core = tree_frags_from_mol(m1,core_weight)
     if clean_core is None:
-        return None, None, None, None
+        return error
     core = Chem.ReplaceSidechains(m1, clean_core)
     sidechains = Chem.ReplaceCore(m1, clean_core)
     if core is None or sidechains is None:
-        return None, None, None, None
+        return error
     core_smiles = Chem.MolToSmiles(core)
     sidechains_smiles = Chem.MolToSmiles(sidechains)
     if core_smiles == '' or sidechains_smiles == '':
-        return None, None, None, None
-    set_hole_ids(m1, core)
-    return clean_core, core_smiles, sidechains ,sidechains_smiles
+        return error
+    hole_neighbors = set_hole_ids(m1, core)
+    return clean_core, core_smiles, sidechains ,sidechains_smiles, hole_neighbors
 
 def get_mask_of_sidechains(full_mol,sidechains):
     frags = Chem.GetMolFrags(sidechains, asMols=True)
@@ -90,10 +107,17 @@ def get_mask_of_sidechains(full_mol,sidechains):
     return mask
 
 def set_hole_ids(mol, core):
+    near_holes = []
+    hole_usage_counter = defaultdict(int)
     for atom in core.GetAtoms():
         if atom.GetSymbol() == '*':
+            iso = atom.GetIsotope()
             for neighbor in atom.GetNeighbors():
-                mol.GetAtomWithIdx(neighbor.GetIntProp("__origIdx")).SetIntProp("__holeIdx", atom.GetIsotope())
+                n_id = neighbor.GetIntProp("__origIdx")
+                near_holes.append(n_id)
+                hole_usage_counter[n_id] += 1
+                mol.GetAtomWithIdx(n_id).SetIntProp("__holeIdx", hole_usage_counter[n_id])
+    return near_holes
 
 def get_holes(mol):
     hole_lst = np.zeros(mol.GetNumAtoms())
@@ -108,7 +132,7 @@ def smiles_valid(smiles,verbose=False):
     mol = Chem.MolFromSmiles(smiles)
     if mol:
         return True
-    print(smiles)
+    # print(smiles)
     return False
 
 def get_fp(mol):
@@ -232,15 +256,18 @@ def add_attachment_points(mol, n, seed=None, fg_weight=0, fg_list=[]):
                 new_atom = atom
         new_atom.SetIntProp("__origIdx", idxs.pop())
 
-    set_hole_ids(mol, current_mol)
+    hole_neighbors = set_hole_ids(mol, current_mol)
     current_smiles = Chem.MolToSmiles(current_mol)
-    return current_smiles
+    return current_smiles, hole_neighbors
 
 
 if __name__ == '__main__':
-    ligand = Chem.MolFromSmiles("O=c1c2ccccc2nc2n1CCCS2")
-    core, core_smiles, sidechains ,sidechains_smiles = get_core_and_chains(ligand)
-    # core_indices = get_mask_of_sidechains(ligand,core)
-    # sidechain_indices = get_mask_of_sidechains(ligand,sidechains)
-    print(add_attachment_points(ligand, 2))
-    print(get_holes(ligand))
+    # ligand = Chem.MolFromSmiles("c1cc2c(cc1[C@H]1OC[C@H]3[C@@H](c4ccc5c(c4)OCO5)OC[C@@H]13)OCO2")
+    # core, core_smiles, sidechains ,sidechains_smiles, hole_neighbors = get_core_and_chains(ligand)
+    # # core_indices = get_mask_of_sidechains(ligand,core)
+    # # sidechain_indices = get_mask_of_sidechains(ligand,sidechains)
+    # print(add_attachment_points(ligand, 2))
+    # print(get_holes(ligand))
+
+    reconstruct_from_core_and_chains('[1*]c1cccc2n1cc(-c1ccc([2*])cc1)[n+]2[3*]',
+                                     '[1*]NC(C)=N(C)C.[2*]O.[3*]CC(=O)C')

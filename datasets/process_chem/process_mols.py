@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime
 from typing import List, Optional
 import warnings
 import numpy as np
@@ -146,6 +147,7 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
             atoms_edge_index = knn_graph(atom_coords, k=atom_max_neighbors if atom_max_neighbors else 1000)
         else:
             atoms_distances = cdist(atom_coords, atom_coords)
+            argsorts = atoms_distances.argsort() 
             atom_src_list = []
             atom_dst_list = []
             for i in range(len(atom_coords)):
@@ -153,9 +155,9 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
                 dst.remove(i)
                 max_neighbors = atom_max_neighbors if atom_max_neighbors else 1000
                 if max_neighbors != None and len(dst) > max_neighbors:
-                    dst = list(np.argsort(atoms_distances[i, :]))[1: max_neighbors + 1]
+                    dst = argsorts[i][1: max_neighbors + 1]
                 if len(dst) == 0:
-                    dst = list(np.argsort(atoms_distances[i, :]))[1:2]  # choose second because first is i itself
+                    dst = argsorts[i][1:2]  # choose second because first is i itself
                     print(
                         f'The atom_cutoff {atom_cutoff} was too small for one atom such that it had no neighbors. '
                         f'So we connected it to the closest other atom')

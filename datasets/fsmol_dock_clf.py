@@ -114,23 +114,23 @@ class FsDockClfDataset(FsDockDataset):
     def process_ligand(args):
         res = {}
         try:
-            task_name, idx, ligand_path = args
+            task_name, idx, ligand_path, core_weight = args
             ligand = read_molecule(ligand_path, sanitize=True)
             if ligand is None:
                 return task_name, idx, res
             smiles = get_mol_smiles(ligand)
             res['ligand']=ligand
             res['smiles']=smiles
-            core, core_smiles, sidechains, sidechains_smiles = get_core_and_chains(
-                ligand
+            core, core_smiles, sidechains, sidechains_smiles, hole_neighbors = get_core_and_chains(
+                ligand, core_weight
             )
             if core is None:
-                core_smiles = add_attachment_points(ligand, 2)
+                core_smiles, hole_neighbors = add_attachment_points(ligand, 2)
                 if core_smiles is None:
                     get_logger().warning(
                         f"couldnt extract core: {task_name}, {idx}, {Chem.MolToSmiles(ligand)}"
                     )
-                sidechains_mask = np.zeros(ligand.GetNumAtoms())
+                sidechains_mask = np.zeros(ligand.GetNumAtoms()).astype(int)
                 sidechains_smiles = ''
             else:
                 sidechains_mask = get_mask_of_sidechains(ligand, sidechains)
@@ -138,11 +138,13 @@ class FsDockClfDataset(FsDockDataset):
             res['core_smiles']=core_smiles
             res['sidechains']=sidechains
             res['sidechains_smiles']=sidechains_smiles
-
+            res['hole_neighbors'] = hole_neighbors
             hole_features = get_holes(ligand)
             extra_atom_feats = {'__holeIdx': hole_features}
 
             res['sidechains_mask']=sidechains_mask
+            
+            res['num_sidechains']= sidechains_mask.max().item() if sidechains_mask.max().item() > 0 else 2
             res['extra_atom_feats']=extra_atom_feats
             return task_name, idx, res
         except Exception as e:

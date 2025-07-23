@@ -6,10 +6,14 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 import torch
+import torch.utils.data
 from torch import nn
 from torch.optim import Adam
 from torch_geometric.loader import DataLoader
+from torch_geometric.data import Batch
 from pytorch_lightning.callbacks import ModelCheckpoint
+from sklearn.metrics import roc_auc_score, average_precision_score
+
 
 from datasets.custom_distributed_sampler import CustomDistributedSampler, CustomTaskDistributedSampler
 from datasets.fsmol_dock import FsDockDataset
@@ -22,43 +26,39 @@ from datasets.process_chem.process_sidechains import (
 )
 from models.cfom_dock import CfomDock
 from models.graph_encoder import GraphEncoder
-from models.tasks.task import AtomNumberTask
 from utils.logging_utils import configure_logger, get_logger
 from rdkit import Chem
 from torchmetrics import ROC, AUROC
-
+from models.protonet.protonet import PrototypicalNetwork
 
 class FSDockLightning(pl.LightningModule):
     def __init__(
         self,
         graph_encoder_model: GraphEncoder,
+        protonet: PrototypicalNetwork,
         lr,
         weight_decay,
         name=None,
         smol=True,
         num_examples=10,
-        k_nearest=5
+        support_size=5
     ):
         super().__init__()
         self.lr = lr
         self.weight_decay = weight_decay
         self.graph_encoder_model = graph_encoder_model
+        self.protonet = protonet
         edge_c = graph_encoder_model.edge_channels
         g_out = graph_encoder_model.out_channels
-        self.attention_layer = nn.MultiheadAttention(g_out, 8,batch_first=True)
         self.name = name or f'{datetime.today().strftime("%Y-%m-%d-%H_%M_%S")}'
         self.name = f'fs_dock_{self.name}'
         self.smol = smol
         self.num_examples = num_examples
-        self.k_nearest = k_nearest
+        self.support_size = support_size
         self.freeze_layers = self.graph_encoder_model.freeze_layers
-        self.unfreeze_start = 2
+        self.unfreeze_start = 0
         self.unfreeze_step = 2
         
-        self.auroc = AUROC('binary')
-        self.roc = ROC('binary')
-
-
     @staticmethod
     def worker_init_fn(worker_id):
         worker_info = torch.utils.data.get_worker_info()
@@ -86,8 +86,9 @@ class FSDockLightning(pl.LightningModule):
                 )
         dlt = DataLoader(dst, 
                          sampler=CustomTaskDistributedSampler(dst, shuffle=True,
-                                           task_size=10))
-        dlt.collate_fn = self.collator_fix(dlt.collate_fn)
+                                           support_size=32, query_size=16))
+        dlt.collate_fn = lambda x: x[0]
+        # dlt.collate_fn = self.collator_fix(dlt.collate_fn)
         return dlt
     
     def val_dataloader(self):
@@ -97,13 +98,29 @@ class FSDockLightning(pl.LightningModule):
                               )
         dlv = DataLoader(dsv, 
                          sampler=CustomTaskDistributedSampler(dsv, shuffle=True,
-                                           task_size=18), 
+                                           support_size=32, query_size=20), 
                 worker_init_fn=self.worker_init_fn)
-        dlv.collate_fn = self.collator_fix(dlv.collate_fn)
+        dlv.collate_fn = lambda x: x[0]
+        # dlv.collate_fn = self.collator_fix(dlv.collate_fn)
+        return dlv
+
+    def test_dataloader(self):
+        dsv = FsDockDatasetPartitioned(
+                'data/fsdock/test',
+                'data/fsdock/test_tasks.csv',
+                              )
+        dlv = DataLoader(dsv, 
+                         sampler=CustomTaskDistributedSampler(dsv, shuffle=True,
+                                           support_size=30, query_size=15), 
+                worker_init_fn=self.worker_init_fn)
+        dlv.collate_fn = lambda x: x[0]
+        # dlv.collate_fn = self.collator_fix(dlv.collate_fn)
         return dlv
     
+
     
     def on_train_epoch_start(self):
+        return
         if self.current_epoch == 0:
             for layers in self.freeze_layers:
                 if not isinstance(layers,list):
@@ -129,72 +146,46 @@ class FSDockLightning(pl.LightningModule):
                 for param in layer.parameters():
                     param.requires_grad=True
     
-    def get_embedding(self,data):
-        memory = self.graph_encoder_model(data) # (N,L,E)
-        graph_padding_mask = self.graph_encoder_model.create_memory_key_padding_mask(
-            data
-        )
-        attn_output, attn_output_weights = self.attention_layer(memory,memory,memory, key_padding_mask=graph_padding_mask)
-        embeddings = attn_output.max(1).values
-        return embeddings / embeddings.norm(2,dim=-1,keepdim=True)
-        
-    def get_distances(self,embd, embd2=None):
-        '''
-        embeddings: (N, E)
-        '''
-        embd2 = embd if embd2 is None else embd2
-        diff = embd.unsqueeze(1) - embd2.unsqueeze(0)
-        distances = diff.norm(2,dim=2)
-        return distances
     
-    def training_step(self, data, batch_idx):
-        embeddings = self.get_embedding(data)
-        distances = self.get_distances(embeddings)
-        labels = data.label
+    def get_stats(self,graph):
+        support_graph = Batch.from_data_list(graph[0])
+        query_graph = Batch.from_data_list(graph[1])
+        support_graph = self.graph_encoder_model(support_graph, keep_hetrograph=True)
+        query_graph = self.graph_encoder_model(query_graph, keep_hetrograph=True)
+        logits = self.protonet(support_graph, query_graph)
+        loss = self.protonet.compute_loss(logits, query_graph.label.to(logits.device))
         
-        same_class_mask = labels.unsqueeze(0) == labels.unsqueeze(-1)
-        dist2 = distances
-        loss = dist2[same_class_mask].mean() - dist2[~same_class_mask].mean()
-
+        pred_labels = torch.nn.functional.softmax(logits, dim=1)[:,1].detach().cpu().numpy()
+        labels = query_graph.label.numpy()
+        roc_auc = roc_auc_score(labels, pred_labels)
+        auprc = average_precision_score(labels, pred_labels)
+        d_auprc = auprc - labels.sum() / len(labels)
+        return roc_auc, d_auprc, loss
+    
+    def training_step(self, graph, batch_idx):
+        roc_auc, d_auprc, loss = self.get_stats(graph)
+        
         self.log("train_loss", loss, sync_dist=True)
+        self.log("train_roc_auc", roc_auc,batch_size=len(graph),  sync_dist=True)
+        self.log("train_delta_auprc", d_auprc,batch_size=len(graph),  sync_dist=True)
         return loss
 
-    def classify(self,data):
-        embeddings = self.get_embedding(data)
-        labels = data.label
-        example_indices = torch.randperm(labels.shape[0])[:self.num_examples]
-        example_mask = torch.fill(torch.zeros(len(labels)).bool(),False)
-        example_mask[example_indices] = True
-        query_mask = ~example_mask
-        
-        example_labels = labels[example_mask]
-        query_labels = labels[query_mask]
-        query_example_mask = query_mask.unsqueeze(-1) & example_mask.unsqueeze(0)
-        query_example_distances = self.get_distances(embeddings[query_mask], embeddings[example_mask]) # (queries, examples)
-        query_example_topk = query_example_distances.topk(self.k_nearest,largest=False).indices
-        pred_labels = []
-        for topk_examples_idx in query_example_topk:
-            topk_labels = example_labels[topk_examples_idx]
-            pred_label = (topk_labels.sum() / self.k_nearest )
-            pred_labels.append(pred_label)
-        pred_labels = torch.tensor(pred_labels, device=query_labels.device)
-        return query_labels,pred_labels
-        
-
     def validation_step(self, graph, batch_idx):
-        query_labels,pred_labels = self.classify(graph)
-        roc_auc = self.auroc(pred_labels, query_labels)
-        fpr, tpr, thresholds = self.roc(pred_labels, query_labels)
+        roc_auc, d_auprc, loss = self.get_stats(graph)
+
+        self.log("val_loss", loss,batch_size=len(graph),  sync_dist=True)
         self.log("val_roc_auc", roc_auc,batch_size=len(graph),  sync_dist=True)
-        return roc_auc
+        self.log("val_delta_auprc", d_auprc,batch_size=len(graph),  sync_dist=True)
+        return loss
 
     def test_step(self, graph, batch_idx):
-        query_labels,pred_labels = self.classify(graph)
-        roc_auc = self.auroc(pred_labels, query_labels)
-        fpr, tpr, thresholds = self.roc(pred_labels, query_labels)
+        roc_auc, d_auprc, loss = self.get_stats(graph)
 
+        self.log("test_loss", loss, batch_size=len(graph), sync_dist=True)
         self.log("test_roc_auc", roc_auc,batch_size=len(graph),  sync_dist=True)
-        
+        self.log("test_delta_auprc", d_auprc,batch_size=len(graph),  sync_dist=True)
+        return loss
+    
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, min_lr=self.lr / 100)

@@ -58,6 +58,7 @@ lig_feature_dims = (list(map(len, [
     allowable_features['possible_is_in_ring7_list'],
     allowable_features['possible_is_in_ring8_list'],
 ])), 0)  # number of scalar features
+get_lig_feature_dims = lambda: lig_feature_dims
 
 rec_atom_feature_dims = (list(map(len, [
     allowable_features['possible_amino_acids'],
@@ -66,6 +67,10 @@ rec_atom_feature_dims = (list(map(len, [
     allowable_features['possible_atom_type_3'],
 ])), 0)
 
+get_rec_atom_feature_dims = lambda: rec_atom_feature_dims
+
 rec_residue_feature_dims = (list(map(len, [
     allowable_features['possible_amino_acids']
 ])), 0)
+
+get_rec_residue_feature_dims = lambda: rec_residue_feature_dims

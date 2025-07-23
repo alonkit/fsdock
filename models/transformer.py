@@ -29,8 +29,11 @@ class PositionalEncoding(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, vocab_dim, embedding_dim, hidden_size, nhead, n_layers, max_length, pad_token, dropout=0.1):
+    def __init__(self, tokenizer, embedding_dim, hidden_size, nhead, n_layers, max_length, dropout=0.1):
         super(TransformerEncoder, self).__init__()
+        vocab_dim = len(tokenizer.get_vocab())
+        pad_token = tokenizer.token_to_id("<pad>")
+        
         self.seq_len = max_length
         self.positional_encoding = PositionalEncoding(embedding_dim, max_len=self.seq_len)
         self.token_embedding = nn.Embedding(vocab_dim, embedding_dim)
@@ -51,9 +54,15 @@ class TransformerEncoder(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, vocab_dim, embedding_dim, hidden_size, nhead, n_layers, max_length,
-                 pad_token, start_token, end_token, dropout=0.1, ):
+    def __init__(self, tokenizer, embedding_dim, hidden_size, nhead, n_layers, max_length,
+                 dropout=0.1, ):
         super(TransformerDecoder, self).__init__()
+        
+        pad_token=tokenizer.token_to_id("<pad>")
+        start_token=tokenizer.token_to_id("<bos>")
+        end_token=tokenizer.token_to_id("<eos>")
+        vocab_dim = len(tokenizer.get_vocab())
+
         self.seq_len = max_length
         self.positional_encoding = PositionalEncoding(embedding_dim, max_len=self.seq_len)
         self.token_embedding = nn.Embedding(vocab_dim, embedding_dim)

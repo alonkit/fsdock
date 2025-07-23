@@ -4,7 +4,28 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
+{
+            "name": "debug main",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "/home/alon.kitin/fs-dock/configs/config_v2_no_neg.yaml",
+            ]
+        },{
+            "name": "debug main test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main_test.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "/home/alon.kitin/fs-dock/experiments/cfom_dock_margin_v2/2025_06_24_23_34/config.yaml",
+                "/home/alon.kitin/fs-dock/experiments/cfom_dock_margin_v2/2025_06_24_23_34/checkpoints/CfomDockLightning/validation_avg_success=0.19958_epoch=109.ckpt"
+            ]
+        },
         {
             "name": "debug playground",
             "type": "debugpy",
@@ -18,7 +39,19 @@
             "name": "debug train",
             "type": "debugpy",
             "request": "launch",
-            "program": "train-text.py",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "SMOL": "1"
+            }
+        },
+
+        {
+            "name": "debug train-fs",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "train-fs.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {

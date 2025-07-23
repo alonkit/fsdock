@@ -1,3 +1,4 @@
+import sys
 import scipy.spatial # very important, does not work without it, i don't know why
 import resource
 
@@ -89,86 +90,27 @@ def worker_init_fn(worker_id):
     dataset.sub_proteins.open()   
 
 
-def pretrain_model(full_model, wandb_logger,smol):
-    model = full_model.graph_encoder
-    # wandb_logger.watch(model, log='all')
-
-    
-    dock_lit_model = DockLightning(model, lr=1e-4, weight_decay=1e-4, smol=smol)
-    checkpoint_callback = ModelCheckpoint(
-        save_top_k=-1,
-        monitor="val_noise_loss",
-        mode="max",
-        dirpath=f"checkpoints/{dock_lit_model.name}/",
-        filename= "{epoch:02d}-{val_noise_loss:.5f}",
-    )
-    trainer = pl.Trainer(
-        # num_nodes=2,
-        # devices=10,
-        max_epochs=100, 
-        callbacks=[checkpoint_callback], 
-        check_val_every_n_epoch=10,
-        strategy='ddp_find_unused_parameters_true',
-        logger=wandb_logger)
-    # tuner = Tuner(trainer)
-    # tuner.scale_batch_size(lit_model, mode="binsearch")
-    trainer.fit(dock_lit_model)
-    
-    # wandb_logger.experiment.unwatch(model)
-
-def load_finedtuned_graph_encoder(full_model, path):
-    model = full_model.graph_encoder
-
-    
-    dock_lit_model = DockLightning.load_from_checkpoint(path, graph_encoder_model=model, lr=1e-4, weight_decay=1e-4)
-
-def train_model(smol=False):
-    wandb_logger = WandbLogger(project="CfomDockLightning" + ("no_bindings" if ABLATION else ""), offline=smol)
-
+def test_model(path):
+    get_logger().info("Testing model")
     tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json')
     model = get_model(tokenizer)
-    
-    # load finetuned
-    load_finedtuned_graph_encoder(model, '/home/alon.kitin/fs-dock/checkpoints/dock_2025-04-14-22_58_32/epoch=99-val_noise_loss=0.01746.ckpt')
-    #pretrain
-    # pretrain_model(model, wandb_logger, smol)
 
-    # wandb_logger.watch(model, log='all')
 
+    dstest = FsDockClfDataset("data/fsdock/clfs/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.70)
+    dltest = DataLoader(dstest, batch_size=64, 
+                         num_workers=torch.get_num_threads()//2, 
+                        worker_init_fn=worker_init_fn)
     
-    cfom_dock_lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, smol=smol, name="no_bindings" if ABLATION else "")
-    # cfom_dock_lit_model = CfomDockLightning.load_from_checkpoint('checkpoints/cfom_dock_2025-02-14-21_05_43/epoch=54-validation_avg_success=0.22468.ckpt',cfom_dock_model=model, tokenizer=tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=10, smol=smol)
     
-    checkpoint_callback = ModelCheckpoint(
-        save_top_k=10,
-        monitor="validation_avg_success",
-        mode="max",
-        dirpath=f"checkpoints/{cfom_dock_lit_model.name}/",
-        filename= "{epoch:02d}-{validation_avg_success:.5f}",
-    )
+    lit_model = CfomDockLightning(model, tokenizer, lr=1e-4, weight_decay=1e-4, num_gen_samples=20, test_clfs=dstest.clfs,name="no_bindings" if ABLATION else "")
     trainer = pl.Trainer(
-        # num_nodes=2,
-        num_sanity_val_steps=2 if smol else 0,
-        devices=1 if smol else 8,
-        max_epochs=150, 
-        callbacks=[checkpoint_callback], 
-        check_val_every_n_epoch=5,
-        strategy='ddp_find_unused_parameters_true',
-        logger=wandb_logger)
-    # tuner = Tuner(trainer)
-    # tuner.scale_batch_size(lit_model, mode="binsearch")
-    trainer.fit(cfom_dock_lit_model)
-    
-    # wandb_logger.experiment.unwatch(model)
-    # dstest = FsDockClfDataset("data/fsdock/test", "data/fsdock/test_tasks.csv",tokenizer=tokenizer, only_inactive=True, min_roc_auc=0.7)
-    # dltest = DataLoader(dstest, batch_size=64, 
-    #                      num_workers=torch.get_num_threads()//2, 
-    #                     worker_init_fn=worker_init_fn)
-    # trainer.test(cfom_dock_lit_model, dltest, ckpt_path="best")
+        max_epochs=100, 
+        check_val_every_n_epoch=10,
+        strategy='ddp_find_unused_parameters_true')
+    trainer.test(lit_model, dltest, ckpt_path=path)
 
 
 if __name__ == "__main__":
-    train_model(smol=bool(os.environ.get("SMOL")))
-    # train_fs_model(smol=bool(os.environ.get("SMOL")))
-    # test_model('/home/alon.kitin/fs-dock/checkpoints/cfom_dock_2025-03-09-07_36_09/epoch=49-validation_avg_success=0.20919.ckpt')
+    sys.argv[1]
+    test_model(sys.argv[1])
     

@@ -22,7 +22,6 @@ from datasets.process_chem.process_sidechains import (
 )
 from models.cfom_dock import CfomDock
 from models.graph_encoder import GraphEncoder
-from models.tasks.task import AtomNumberTask
 from utils.logging_utils import configure_logger, get_logger
 
 
@@ -54,27 +53,37 @@ class DockLightning(pl.LightningModule):
         dataset = worker_info.dataset
         dataset.sub_proteins.open()
     
-    def train_dataloader(self):
-        if self.smol:
-            dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv', num_workers=torch.get_num_threads())
-        else:
-            dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv")
-        dlt = DataLoader(dst, batch_size=2 if self.smol else 24 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
-                        worker_init_fn=self.worker_init_fn)
-        return dlt
+    # def train_dataloader(self):
+    #     if self.smol:
+    #         dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv', num_workers=torch.get_num_threads())
+    #     else:
+    #         dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv")
+    #     dlt = DataLoader(dst, batch_size=2 if self.smol else 24 , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
+    #                     worker_init_fn=self.worker_init_fn)
+    #     return dlt
     
-    def val_dataloader(self):
-        dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv")
-        dlv = DataLoader(dsv, batch_size=24, 
-                num_workers=torch.get_num_threads()//2, 
-                worker_init_fn=self.worker_init_fn)
-        return dlv
+    # def val_dataloader(self):
+    #     dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv", min_roc_auc=0.7)
+    #     dlv = DataLoader(dsv, batch_size=24, 
+    #             num_workers=torch.get_num_threads()//2, 
+    #             worker_init_fn=self.worker_init_fn)
+    #     return dlv
     
     def t_to_sigma(self, t):
         return 0.05 ** (1-min(t,1)) * self.max_noise_scale ** t
     
-    def pred_distances(self, data, orig_lig_poses):
+    def pred_distances(self, data):
         data = self.graph_encoder_model(data, keep_hetrograph=True)
+        device = data['ligand'].x.device
+        masks = {
+            node_t:(
+                (data.sidechains_mask != 0).to(device)
+                if node_t == "ligand"
+                else torch.arange(data[node_t].num_nodes, device=device)
+            )
+            for node_t in data.metadata()[0]
+        }
+        data=  data.subgraph(masks)
         ll = data['ligand','ligand'].edge_index
         ligand_edges_no_self = ll[:, ll[0]!=ll[1]]
         ll_i, ll_j = data['ligand'].x[ligand_edges_no_self]
@@ -85,7 +94,7 @@ class DockLightning(pl.LightningModule):
         la = torch.concat([la_i, la_j, data['ligand','atom'].edge_attr],dim=-1)
         edges = torch.concat([ll,lr,la], dim=0)
         pred_dists = self.distances_layer(edges).squeeze(-1)
-        orig_dists = self.get_distances(data, orig_lig_poses)
+        orig_dists = self.get_distances(data, data['ligand'].orig_pos)
         return pred_dists, orig_dists
 
     def get_distances(self,data, lig_poses):
@@ -97,27 +106,36 @@ class DockLightning(pl.LightningModule):
         la = (la_i - la_j).norm(dim=-1)
         return torch.concat([ll,lr,la], dim=0)
 
-    
-    def training_step(self, data, batch_idx):
-        poses = data['ligand'].pos
+    def hide_sidechains(self, data):
+        orig_pos = data['ligand'].pos.clone()
+        data['ligand'].orig_pos = orig_pos
+        mask = data.sidechains_mask != 0
         sigma = self.t_to_sigma(self.current_epoch / self.trainer.max_epochs)
-        pos_noise = torch.normal(0,sigma, poses.shape,device=poses.device)
-        data['ligand'].pos = poses + pos_noise
-        pred_dists, orig_dists = self.pred_distances(data, poses)
+        pos_noise = torch.normal(0,sigma, orig_pos[mask].shape,device=orig_pos.device)
+        data['ligand'].pos[mask] = orig_pos[mask] + pos_noise
+        # for i in range(len(data)):
+        #     mol = data[i]
+        #     for i, hole_neighbor in enumerate(mol.hole_neighbors):
+        #         hole_pos = mol['ligand'].pos[hole_neighbor].clone()
+        #         mol['ligand'].pos[mol.sidechains_mask == i+1] = hole_pos
+        return data
+
+    def get_loss(self, data):
+        self.hide_sidechains(data)
+        pred_dists, orig_dists = self.pred_distances(data)
         loss = ((orig_dists - pred_dists)**2 ) * (1/(orig_dists+1))
         loss = loss.mean()
+        return loss
+         
+    
+    def training_step(self, data, batch_idx):
+        loss = self.get_loss(data)
         self.log("train_noise_loss", loss, sync_dist=True, prog_bar=True)
         return loss
             
             
     def validation_step(self, data, batch_idx):
-        poses = data['ligand'].pos
-        sigma = self.t_to_sigma(self.current_epoch / self.trainer.max_epochs)
-        pos_noise = torch.normal(0,sigma, poses.shape,device=poses.device)
-        data['ligand'].pos = poses + pos_noise
-        pred_dists, orig_dists = self.pred_distances(data, poses)
-        loss = ((orig_dists - pred_dists)**2 ) * (1/(orig_dists+1))
-        loss = loss.mean()
+        loss = self.get_loss(data)
         self.log("val_noise_loss", loss, batch_size=len(data), sync_dist=True, prog_bar=True)
         return loss
 
