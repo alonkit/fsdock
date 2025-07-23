@@ -62,6 +62,7 @@ class FsDockDataset(Dataset):
         tokenizer=None,
         load_mols=False,
         core_weight=0.5,
+        random_max_angle=None,
     ):
         if isinstance(tasks, str):
             tasks = pd.read_csv(tasks)
@@ -83,13 +84,41 @@ class FsDockDataset(Dataset):
             f"rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}_rh{remove_hs}_cw{core_weight}.npz"
         self.tokenizer = tokenizer
         self.tasks = {}
+        self.random_max_angle = random_max_angle
         self.load_mols = load_mols
         super().__init__(root, transform)
         if not hasattr(self, "protein_graphs"):
             self.load()
         self.task_sizes = {k: len(v["graphs"]) for k, v in self.tasks.items()}
         self._indices = self.get_indices()
+    
 
+    def random_small_rotation_matrix(self, max_angle):
+        # Random unit axis
+        axis = torch.randn(3)
+        axis = axis / axis.norm()
+        
+        # Small angle in [-max_angle, max_angle]
+        angle = (torch.rand(1) * 2 - 1) * max_angle
+
+        K = torch.tensor([
+            [0, -axis[2], axis[1]],
+            [axis[2], 0, -axis[0]],
+            [-axis[1], axis[0], 0]
+        ])
+
+        R = torch.eye(3) + torch.sin(angle) * K + (1 - torch.cos(angle)) * (K @ K)
+        return R
+
+    def rotate_point_cloud(self, pc, max_angle):
+        centroid = pc.mean(dim=0)
+        pc_centered = pc - centroid
+
+        R = self.random_small_rotation_matrix(max_angle)
+        pc_rotated = pc_centered @ R.T
+        pc_rotated += centroid
+
+        return pc_rotated
 
     def get_indices(self):
         split_indexes = []
@@ -162,6 +191,8 @@ class FsDockDataset(Dataset):
             task_name, i = self._indices[idx]
         
         graph = deepcopy(self.tasks[task_name]["graphs"][i])
+        if self.random_max_angle is not None:
+            graph["ligand"].pos = self.rotate_point_cloud(graph["ligand"].pos, self.random_max_angle)
         graph.task = task_name
         graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask).to(torch.int)
         graph.hole_neighbors = torch.tensor(graph.hole_neighbors)

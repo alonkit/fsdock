@@ -34,6 +34,8 @@ def get_num_fused_rings(mol):
                 num_fused_rings.update([i, j])
     return len(num_fused_rings)
 
+
+
 def tree_frags_from_mol(mol, weight_ratio=0.5):
     scaffold = sg.core.Scaffold(sg.core.fragment.get_murcko_scaffold(mol))
     rdmolops.RemoveStereochemistry(scaffold.mol)
@@ -42,6 +44,7 @@ def tree_frags_from_mol(mol, weight_ratio=0.5):
     fragmenter = sg.core.MurckoRingSystemFragmenter()
     minimal_core_weight = AllChem.CalcExactMolWt(mol) * weight_ratio 
     rules = sg.prioritization.original_ruleset
+    original_rings_count = scaffold.rings.count
 
     def _next_scaffold(child):
         next_parents = [p for p in fragmenter.fragment(child) if (p and AllChem.CalcExactMolWt(p.mol)> minimal_core_weight)]
@@ -55,8 +58,17 @@ def tree_frags_from_mol(mol, weight_ratio=0.5):
         _next_scaffold(scaffold)
     except Exception as e:
         logger.error(f"Error in tree_frags_from_mol: {e}, {Chem.MolToSmiles(mol)}")
-
-    return [p.mol for p in parents][-1]
+        
+    for p in reversed(parents):
+        try:
+            sidechains = Chem.ReplaceCore(mol, p.mol)
+            Chem.SanitizeMol(sidechains)
+            if original_rings_count == sidechains.GetRingInfo().NumRings() + p.rings.count:
+                return p.mol
+        except Exception as e:
+            logger.error(f"Error processing scaffold {p.smiles}: {e}")
+            continue
+    return None
 
 def get_mol_smiles(mol):
     if isinstance(mol,str):
@@ -120,7 +132,7 @@ def smiles_valid(smiles,verbose=False):
     mol = Chem.MolFromSmiles(smiles)
     if mol:
         return True
-    print(smiles)
+    # print(smiles)
     return False
 
 def get_fp(mol):
@@ -250,9 +262,12 @@ def add_attachment_points(mol, n, seed=None, fg_weight=0, fg_list=[]):
 
 
 if __name__ == '__main__':
-    ligand = Chem.MolFromSmiles("c1cc2c(cc1[C@H]1OC[C@H]3[C@@H](c4ccc5c(c4)OCO5)OC[C@@H]13)OCO2")
-    core, core_smiles, sidechains ,sidechains_smiles, hole_neighbors = get_core_and_chains(ligand)
-    # core_indices = get_mask_of_sidechains(ligand,core)
-    # sidechain_indices = get_mask_of_sidechains(ligand,sidechains)
-    print(add_attachment_points(ligand, 2))
-    print(get_holes(ligand))
+    # ligand = Chem.MolFromSmiles("c1cc2c(cc1[C@H]1OC[C@H]3[C@@H](c4ccc5c(c4)OCO5)OC[C@@H]13)OCO2")
+    # core, core_smiles, sidechains ,sidechains_smiles, hole_neighbors = get_core_and_chains(ligand)
+    # # core_indices = get_mask_of_sidechains(ligand,core)
+    # # sidechain_indices = get_mask_of_sidechains(ligand,sidechains)
+    # print(add_attachment_points(ligand, 2))
+    # print(get_holes(ligand))
+
+    reconstruct_from_core_and_chains('[1*]c1cccc2n1cc(-c1ccc([2*])cc1)[n+]2[3*]',
+                                     '[1*]NC(C)=N(C)C.[2*]O.[3*]CC(=O)C')

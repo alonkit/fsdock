@@ -1,4 +1,5 @@
 
+import sys
 import scipy.spatial # very important, does not work without it, i don't know why
 from datetime import datetime
 import numpy as np
@@ -24,28 +25,36 @@ def worker_init_fn(worker_id):
     dataset.sub_proteins.open()
 
 def make_datasets(core_weight):
-    ds = FsDockDatasetPartitioned('data/fsdock/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
-    ds = FsDockDatasetPartitioned('data/fsdock/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
-    ds = FsDockDatasetPartitioned('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
-    ds = FsDockDatasetPartitioned('data/fsdock/smol','data/fsdock/smol_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    # ds = FsDockDatasetPartitioned('data/fsdock/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    # ds = FsDockDatasetPartitioned('data/fsdock/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    # ds = FsDockDatasetPartitioned('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    ds = FsDockDatasetPartitioned('data/fsdock/all','data/fsdock/all_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
     
-    ds = FsDockClfDataset('data/fsdock/clfs/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7, core_weight=core_weight)
-    ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7, core_weight=core_weight)
+    # ds = FsDockDatasetPartitioned('data/fsdock/smol','data/fsdock/all_tasks.csv', num_workers=torch.get_num_threads(), core_weight=core_weight)
+    
+    # ds = FsDockClfDataset('data/fsdock/clfs/valid','data/fsdock/valid_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7, core_weight=core_weight)
+    # ds = FsDockClfDataset('data/fsdock/clfs/test','data/fsdock/test_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7, core_weight=core_weight)
+    # ds = FsDockClfDataset('data/fsdock/clfs/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads(), min_roc_auc=0.7, core_weight=core_weight)
 
     
 def play():
-    dl = DataLoader(ds, batch_size=2, 
+    ds = FsDockDatasetPartitioned('data/fsdock/train','data/fsdock/train_tasks.csv', num_workers=torch.get_num_threads(), core_weight=0.5)
+    sampler = CustomDistributedSampler(ds, 1, 0, True)
+    dl = DataLoader(ds, batch_size=100, 
                     shuffle=False,   
-                    # num_workers=torch.get_num_threads(), 
-                    worker_init_fn=worker_init_fn)
+                    num_workers=torch.get_num_threads(), 
+                    worker_init_fn=worker_init_fn, sampler=sampler)
     for i,t in enumerate(tqdm(dl)):
         print(i)
     exit()
     
 if __name__ == "__main__":
+    print(torch.get_num_threads())
     make_datasets(0.7)
-    make_datasets(0.5)
-    make_datasets(0.3)
+    # play()
+    exit()
+    frac = float(sys.argv[1])
+    make_datasets(frac)
 
 
 # sampler = CustomDistributedSampler(ds, 3, 1, True)

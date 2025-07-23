@@ -79,7 +79,7 @@ class FsDockDatasetPartitioned(Dataset):
         self.knn_only_graph = knn_only_graph
         self.core_weight = core_weight
         self.tasks_file = f"tasks_rh{remove_hs}_cw{core_weight}.pt"
-        self.tasks_metadata_file  = f"tasks_metadata_rh{remove_hs}.pt"
+        self.tasks_metadata_file  = f"tasks_metadata_rh{remove_hs}_cw{core_weight}.pt"
         self.ligands_file = f"ligands_cw{core_weight}.pt"
         self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
         self.saved_ligand_sub_protein_file = f"sub_protein_ligand_edges_lr{ligand_radius}_la{ligand_radius}_"\
@@ -251,10 +251,13 @@ class FsDockDatasetPartitioned(Dataset):
         
         targets = set(targets)
         tasks = [task for task, target in self.tasks_target.items() if (target in targets or len(targets) == 0)]
+        self.logger.info("started load ligands")
         with MapFileManager(osp.join(self.processed_dir, self.ligands_file),'r')as mf:
             self.ligands = {task:mf[task] for task in tasks}
+        self.logger.info("started load tasks")
         with MapFileManager(osp.join(self.processed_dir, self.tasks_file),'r') as mf:
             self.tasks = {task:mf[task] for task in tasks}
+        self.logger.info("started load prots")
         with MapFileManager(osp.join(self.processed_dir, self.saved_protein_graph_file),'r') as mf:
             if len(targets):
                 self.protein_graphs = {target:mf[target] for target in targets}

@@ -1,6 +1,6 @@
 metadata: 
   name: "cfom_dock"
-  devices: 1
+  devices: auto
 
 logger:
   _target_: "pytorch_lightning.loggers.wandb.WandbLogger"
@@ -50,14 +50,14 @@ model:
   transformer_decoder: 
     _target_: models.transformer.TransformerDecoder
     tokenizer: ${tokenizer}
-    embedding_dim: 304
+    embedding_dim: 128
     hidden_size: 128
     nhead: 4
     n_layers: 2
     max_length: 128
   interaction_encoder:
     _target_: models.interaction_encoder.InteractionEncoder
-    output_dim: 304
+    output_dim: 128
   graph_encoder: 
     _target_: models.graph_encoder.GraphEncoder
     in_channels: 48
@@ -92,9 +92,10 @@ lightning:
   lr: 1e-4
   weight_decay: 1e-4
   num_gen_samples: 10
+  handle_inactive: penalty
 
 train:
-  batch_size: 25
+  batch_size: 4
   trainer:
     _target_: "pytorch_lightning.Trainer"
     devices: ${metadata.devices}
@@ -103,20 +104,6 @@ train:
     check_val_every_n_epoch: 5
     strategy: 'ddp_find_unused_parameters_true'
 
-    logger:
-      _target_: "lightning.pytorch.loggers.wandb.WandbLogger"
-      project: "fsmol-dock"
-      name: "cfom_dock"
-      log_model: true
-      save_dir: "logs"
-    callbacks:
-      - _target_: "lightning.pytorch.callbacks.ModelCheckpoint"
-        monitor: "val/roc_auc"
-        mode: "max"
-        save_top_k: 1
-        filename: "{epoch}-{val/roc_auc:.2f}"
-      - _target_: "lightning.pytorch.callbacks.LearningRateMonitor"
-        logging_interval: "step"
 
   val_dataset:
     _target_: "datasets.fsmol_dock_clf.FsDockClfDataset"
@@ -131,5 +118,7 @@ train:
     tasks: "data/fsdock/valid_tasks.csv"
     random_max_angle: 1
   sampler:
-    _target_: "datasets.custom_distributed_sampler.CustomDistributedSampler"
+    _target_: "datasets.custom_distributed_sampler.CustomTaskDistributedSampler"
     shuffle: true
+    task_size: 4
+    stream: true

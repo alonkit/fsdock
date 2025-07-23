@@ -69,14 +69,18 @@ class CustomDistributedSampler(DistributedSampler):
 
 
 class CustomTaskDistributedSampler(CustomDistributedSampler):
-    def __init__(self, dataset,query_size: int, support_size:int, **kwargs):
+    def __init__(self, dataset,query_size: int=None, support_size:int=None, task_size: int=None, stream:bool=True, **kwargs):
+        assert task_size or (query_size and support_size)
+        
         super().__init__(dataset, **kwargs)
+        self.stream=stream
         self.tasks = defaultdict(list)
-        self.task_size = support_size + query_size
+        self.task_size = task_size if task_size else support_size + query_size
         self.query_size = query_size
         self.support_size = support_size
         self.set_tasks()
-        self.num_tasks = self.num_samples // self.task_size
+        self.num_tasks = self.num_samples // self.task_size,
+        
     
     def set_tasks(self):
         tasks_good = defaultdict(list)
@@ -109,9 +113,17 @@ class CustomTaskDistributedSampler(CustomDistributedSampler):
                 idxs = next(task_iters[task])
                 i += 1
                 task = list(zip([task]*len(idxs), idxs))
-                yield [task[:self.support_size], task[self.support_size:]]
+                if self.stream:
+                    for t in task:
+                        yield t
+                elif self.support_size:        
+                    yield [task[:self.support_size], task[self.support_size:]]
+                else:
+                    yield [task]
             except StopIteration:
                 del task_iters[task]
     
     def __len__(self):
+        if self.stream:
+            return self.num_tasks * self.task_size
         return self.num_tasks

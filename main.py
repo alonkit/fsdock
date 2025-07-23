@@ -1,3 +1,4 @@
+import sys
 import scipy.spatial # very important, does not work without it, i don't know why
 import resource
 
@@ -8,10 +9,10 @@ from models.dock_lightning import DockLightning
 from models.fs_dock_lightning import FSDockLightning
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
-
 import pytorch_lightning as pl
 from tokenizers import Tokenizer
 import torch
+torch.multiprocessing.set_sharing_strategy('file_system')
 from datasets.fsmol_dock import FsDockDataset
 from datasets.fsmol_dock_clf import FsDockClfDataset
 from datasets.samplers import TaskSequentialSampler
@@ -32,56 +33,12 @@ from utils.logging_utils import get_logger
 from hydra.utils import instantiate, get_class
 from utils.omega_utils import load_config
 
-
+from rdkit import RDLogger
+RDLogger.logger().setLevel(RDLogger.CRITICAL)
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 torch.manual_seed(0)
 
 ABLATION = True
-
-def get_model(tokenizer):
-    graph_embedder = GraphEmbedder(
-        distance_embed_dim=16,
-        cross_distance_embed_dim=16,
-        lig_max_radius=5,
-        rec_max_radius=10,
-        cross_max_distance=20,
-        lig_feature_dims=features.lig_feature_dims,
-        lig_edge_feature_dim=4,
-        lig_emb_dim=48,
-        rec_feature_dims=features.rec_residue_feature_dims,
-        atom_feature_dims=features.rec_atom_feature_dims,
-        prot_emd_dim=48,
-        dropout=0.3,
-        lm_embedding_dim=1280,
-    )
-    graph_encoder = GraphEncoder(
-        in_channels=48,
-        edge_channels=48,
-        hidden_channels=[48,48,48,48,48,48,48, 48,64],
-        out_channels=128,
-        attention_groups=8,
-        graph_embedder=graph_embedder,
-        dropout=0.1,
-        max_length=128
-    )
-    smiles_encoder = TransformerEncoder(
-        tokenizer,
-        embedding_dim=128,
-        hidden_size=128,
-        nhead=4,
-        n_layers=2,
-        max_length=128,
-    )
-    sidechain_decoder = TransformerDecoder(tokenizer, embedding_dim=304,
-                                            hidden_size=128, nhead=4,
-                                            n_layers=2, max_length=128)
-    interaction_encoder = InteractionEncoder(304)
-    if ABLATION:
-        model = CfomDockAblation(None, sidechain_decoder, interaction_encoder, graph_encoder)
-    else:
-        model = CfomDock(None, sidechain_decoder, interaction_encoder, graph_encoder)
-        
-    return model
 
 def worker_init_fn(worker_id):
     worker_info = torch.utils.data.get_worker_info()
@@ -132,14 +89,11 @@ def load_pretrained_graph_encoder(full_model, config):
     cls = get_class(config.load_pretrained.lightning._target_)
     dock_lit_model = cls.load_from_checkpoint(config.load_pretrained.path, graph_encoder_model=model, lr=1e-4, weight_decay=1e-4)
 
-def train_model(config, smol=False):
+def train_model(config, smol=False, ckpt=None):
     metadata = config.metadata
     wandb_logger = instantiate(config.logger)
 
-    if 'tokenizer' in config:
-        tokenizer = Tokenizer.from_file(config.tokenizer.path)
-    else:
-        tokenizer = Tokenizer.from_file('models/configs/smiles_tokenizer.json') 
+    tokenizer = instantiate(config.tokenizer)
     model = instantiate(config.model)
     
     assert not ("load_pretrained" in config and "pretrain" in config), "Cannot load pretrained and pretrain at the same time, choose one of them"
@@ -152,17 +106,17 @@ def train_model(config, smol=False):
 
     # wandb_logger.watch(model, log='all')
 
-    lit_model = instantiate(config.lightning, model=model, tokenizer=tokenizer, smol=smol, name=metadata.name)
+    lit_model = instantiate(config.lightning, model=model, name=metadata.name)
     lit_model.test_result_path = f'{metadata.experiment_folder}/test_results/{type(lit_model).__name__}/'
     
     checkpoint_callback = ModelCheckpoint(
-        save_top_k=10,
+        save_top_k=-1,
         monitor="validation_avg_success",
         mode="max",
         dirpath=f'{config.metadata.experiment_folder}/checkpoints/{type(lit_model).__name__}/',
         filename= "{validation_avg_success:.5f}_{epoch:02d}",
     )
-    trainer = instantiate(config.train.trainer, logger=wandb_logger, callbacks=[checkpoint_callback])
+    trainer : pl.Trainer = instantiate(config.train.trainer, logger=wandb_logger, callbacks=[checkpoint_callback])
 
     dst = instantiate(config.train.train_dataset, tokenizer=tokenizer
                       )
@@ -182,14 +136,20 @@ def train_model(config, smol=False):
                 num_workers=torch.get_num_threads()//2, 
                 worker_init_fn=worker_init_fn)
     
+    
+    if isinstance(ckpt,str) and len(ckpt)==0:
+        ckpt = None
+    print('ckpt=',ckpt)
+    
     lit_model.validation_clfs=dsv.clfs
     trainer.fit(lit_model, 
                 train_dataloaders=dlt, 
-                val_dataloaders=dlv)
+                val_dataloaders=dlv,
+                ckpt_path=ckpt)
     
 
 if __name__ == "__main__":
-    config= load_config()
+    config= load_config(config_path=sys.argv[1] if len(sys.argv) > 1 else 'config.yaml')
     train_model(smol=bool(os.environ.get("SMOL")), config=config)
     # train_fs_model(smol=bool(os.environ.get("SMOL")))
     # test_model('/home/alon.kitin/fs-dock/checkpoints/cfom_dock_2025-03-09-07_36_09/epoch=49-validation_avg_success=0.20919.ckpt')

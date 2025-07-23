@@ -6,6 +6,7 @@ from torch_geometric.transforms import ToUndirected
 
 
 from models.layers.point_graph_transformer_conv import PGHTConv
+from models.layers.point_graph_transformer_conv_v2 import PGHTConv2
 
 
 class GraphEncoder(torch.nn.Module):
@@ -15,32 +16,40 @@ class GraphEncoder(torch.nn.Module):
         edge_channels: int,
         hidden_channels: Union[int, List[int]],
         out_channels: int,
-        attention_groups: int,
+        attention_groups: Union[int, List[int]],
         graph_embedder: torch.nn.Module,
         dropout: float=0.1,
-        nodes: List[str]=None,
-        edges: List[Tuple[str, str, str]]=None,
         num_layers: int = None,
         max_length=128,
+        version:int = 1
     ):
 
         assert (not isinstance(hidden_channels, int)) or num_layers, "Either hidden_channels is a list or num_layers must be provided"
         if isinstance(hidden_channels, int):
             hidden_channels = [hidden_channels] * (num_layers - 1)
-        nodes = nodes or ['ligand', 'receptor', 'atom']
-        edges = edges or [('ligand', 'lig_bond', 'ligand'), ('receptor', 'to', 'receptor'), ('atom', 'to', 'atom'), ('atom', 'to', 'receptor'), ('ligand', 'to', 'receptor'), ('ligand', 'to', 'atom'), ('receptor', 'rev_to', 'atom'), ('receptor', 'rev_to', 'ligand'), ('atom', 'rev_to', 'ligand')]
         super(GraphEncoder, self).__init__()
         self.convs = torch.nn.ModuleList()
         num_channels = [in_channels,*hidden_channels,out_channels]
-        for i, (in_channels, out_channels) in enumerate(zip(num_channels[:-1], num_channels[1:])):
+        if isinstance(attention_groups, int):
+            attention_groups = [attention_groups] * (len(num_channels) - 1)
+        
+        
+        for i, (in_channels, out_channels, attn_groups) in enumerate(zip(num_channels[:-1], num_channels[1:], attention_groups)):
             self.convs.append(
+                
                 PGHTConv(
                     in_channels=in_channels,
                     out_channels=out_channels,
                     edge_in_channels=edge_channels,
-                    num_attn_groups=attention_groups,
+                    num_attn_groups=attn_groups,
                     dropout=dropout,
-                    metadata=(nodes, edges),
+                ) if version == 1 else
+                PGHTConv2(
+                    in_channels=in_channels,
+                    edge_in_channels=edge_channels,
+                    out_channels=out_channels,
+                    num_attn_groups=attn_groups,
+                    dropout=dropout
                 )
             )
         self.edge_channels = edge_channels
