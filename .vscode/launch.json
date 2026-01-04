@@ -4,7 +4,7 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-{
+        {
             "name": "debug main",
             "type": "debugpy",
             "request": "launch",
@@ -12,9 +12,22 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "args": [
-                "/home/alon.kitin/fs-dock/configs/config_v2_no_neg.yaml",
+                "/home/alon.kitin/fs-dock/configs/gemini/gemini_cross.yaml"
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug/2025_11_25_02_39/checkpoints/CfomDockLightningGemini/validation_avg_success=0.00000_epoch=06-v1.ckpt"
             ]
-        },{
+        },
+        {
+            "name": "debug one shot",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "/home/alon.kitin/fs-dock/configs/config_v2_oneshot.yaml",
+            ]
+        },
+        {
             "name": "debug main test",
             "type": "debugpy",
             "request": "launch",
@@ -22,8 +35,9 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "args": [
-                "/home/alon.kitin/fs-dock/experiments/cfom_dock_margin_v2/2025_06_24_23_34/config.yaml",
-                "/home/alon.kitin/fs-dock/experiments/cfom_dock_margin_v2/2025_06_24_23_34/checkpoints/CfomDockLightning/validation_avg_success=0.19958_epoch=109.ckpt"
+                "configs/gemini/gemini_cross.yaml",
+                "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_22_23_29/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20031_epoch=39.ckpt"
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_16_07_37/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.11760_epoch=39.ckpt"
             ]
         },
         {

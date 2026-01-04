@@ -55,13 +55,14 @@ class TransformerEncoder(nn.Module):
 
 class TransformerDecoder(nn.Module):
     def __init__(self, tokenizer, embedding_dim, hidden_size, nhead, n_layers, max_length,
-                 dropout=0.1, ):
+                 dropout=0.1, return_token_embeddings=False):
         super(TransformerDecoder, self).__init__()
         
         pad_token=tokenizer.token_to_id("<pad>")
         start_token=tokenizer.token_to_id("<bos>")
         end_token=tokenizer.token_to_id("<eos>")
         vocab_dim = len(tokenizer.get_vocab())
+        self.return_token_embeddings = return_token_embeddings
 
         self.seq_len = max_length
         self.positional_encoding = PositionalEncoding(embedding_dim, max_len=self.seq_len)
@@ -72,6 +73,7 @@ class TransformerDecoder(nn.Module):
         self.pad_token = pad_token
         self.start_token = start_token
         self.end_token = end_token
+        self.embedding_dim = embedding_dim
     
     @property
     def device(self):
@@ -98,6 +100,8 @@ class TransformerDecoder(nn.Module):
                               tgt_mask=target_mask, tgt_key_padding_mask=target_padding_mask,
                               memory_key_padding_mask=memory_key_padding_mask, memory_mask=memory_mask)
         logits = self.dense(output)
+        if self.return_token_embeddings:
+            return logits, output
         return logits
 
     def generate(self, cond_memory, memory_key_padding_mask=None, memory_mask=None, max_len=None,
@@ -115,7 +119,10 @@ class TransformerDecoder(nn.Module):
         finished_sample = torch.zeros(batch_size).bool().to(device)
         for i in range(generation_length):
             out = self(ys, cond_memory, target_mask=None,target_padding_mask=None, memory_key_padding_mask=memory_key_padding_mask, memory_mask=memory_mask)
-            probs = torch.softmax(out, dim=2)
+            if self.return_token_embeddings:
+                out, _ = out
+            out = out / 0.5
+            probs = torch.softmax(out, dim=2) 
             sorted_probs, sorted_indices = torch.sort(probs[:, -1, :], descending=True)
             if k is not None:
                 sorted_probs[:,k:] = 0

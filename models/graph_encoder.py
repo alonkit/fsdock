@@ -7,6 +7,7 @@ from torch_geometric.transforms import ToUndirected
 
 from models.layers.point_graph_transformer_conv import PGHTConv
 from models.layers.point_graph_transformer_conv_v2 import PGHTConv2
+from models.layers.point_graph_transformer_conv_v3 import PGHTConv3
 
 
 class GraphEncoder(torch.nn.Module):
@@ -21,7 +22,9 @@ class GraphEncoder(torch.nn.Module):
         dropout: float=0.1,
         num_layers: int = None,
         max_length=128,
-        version:int = 1
+        version:int = 1,
+        distance_scaling: bool = False,
+        update_coords: bool = False,
     ):
 
         assert (not isinstance(hidden_channels, int)) or num_layers, "Either hidden_channels is a list or num_layers must be provided"
@@ -49,8 +52,20 @@ class GraphEncoder(torch.nn.Module):
                     edge_in_channels=edge_channels,
                     out_channels=out_channels,
                     num_attn_groups=attn_groups,
-                    dropout=dropout
+                    dropout=dropout,
+                    distance_scaling=distance_scaling,
+                    coords_update=update_coords,
                 )
+                if version == 2 else
+                PGHTConv3(
+                    in_channels=in_channels,
+                    edge_in_channels=edge_channels,
+                    out_channels=out_channels,
+                    num_attn_groups=attn_groups,
+                    dropout=dropout,
+                    distance_scaling=distance_scaling,
+                )
+                
             )
         self.edge_channels = edge_channels
         self.graph_embedder = graph_embedder
@@ -86,28 +101,22 @@ class GraphEncoder(torch.nn.Module):
         graph['ligand'].ptr = ptr
         return graph
 
-    def pred_distances(self, data):
-        data = self.forward(data, keep_hetrograph=True)
-        ll_i, ll_j = data['ligand'].x[data['ligand'].edge_index]
-        
-        v_i, v_j = data.x[data.edge_index]
-        v_i_e_v_j = torch.concat([v_i, data.edge_index, v_j],dim=-1)
-        pred_dists = self.dist_final_layer(v_i_e_v_j)
-        return pred_dists
+    def embed_graph(self,data):
+        return self.graph_embedder(data)
 
-    def dist_forward(self, hdata: HeteroData):
-        hdata = self.forward(hdata, keep_homograph=True)
-        noise_pred = self.dist_final_layer(hdata['ligand'].x)
-        return noise_pred
+    def undirect_graph(self,data):
+        return ToUndirected()(data)
 
-    def forward(self, hdata: HeteroData, keep_hetrograph=False,keep_homograph=False,convs=None):
-        hdata = self.graph_embedder(hdata)
-        hdata = ToUndirected()(hdata)
+    def forward(self, hdata: HeteroData, keep_hetrograph=False,keep_homograph=False,convs=None, just_x=False):
         data = hdata.to_homogeneous()
         x = data.x
         for conv in (convs or self.convs):
-            x = conv(x, data.edge_index, data.edge_attr, data.pos)
+            x = conv(x, data.edge_index, data.edge_attr, data.pos,data)
         data.x = x
+        if just_x:
+           node_types = data._store.get('node_type', None)
+           ligand_id = data._store.__dict__.get('_node_type_names', None).index('ligand')
+           return x[node_types == ligand_id]
         if keep_homograph:
             return data
         data = data.to_heterogeneous()

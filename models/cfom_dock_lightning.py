@@ -80,24 +80,7 @@ class CfomDockLightning(pl.LightningModule):
 
     def _reset_eval_step_outputs(self):
         self.eval_step_outputs = defaultdict(lambda: defaultdict(list))
-    
-    # def train_dataloader(self):
-    #     if self.smol:
-    #         dst = FsDockDatasetPartitioned('data/fsdock/valid','../docking_cfom/valid_tasks.csv',tokenizer=self.tokenizer, num_workers=torch.get_num_threads())
-    #     else:
-    #         dst = FsDockDatasetPartitioned("data/fsdock/train", "data/fsdock/train_tasks.csv",tokenizer=self.tokenizer, random_max_angle=1)
-    #     dlt = DataLoader(dst, batch_size=self.batch_size , sampler=CustomDistributedSampler(dst, shuffle=True), num_workers=torch.get_num_threads(), 
-    #                     worker_init_fn=self.worker_init_fn)
-    #     return dlt
-    
-    # def val_dataloader(self):
-    #     dsv = FsDockClfDataset("data/fsdock/clfs/valid", "data/fsdock/valid_tasks.csv",tokenizer=self.tokenizer, only_inactive=True, min_roc_auc=0.70)
-    #     dlv = DataLoader(dsv, batch_size=2 if self.smol else 32, 
-    #             num_workers=torch.get_num_threads()//2, 
-    #             worker_init_fn=self.worker_init_fn)
-    #     self.validation_clfs=dsv.clfs
-    #     return dlv
-    
+
     def t_to_sigma(self, t):
         return 0.05 ** (1-min(t,1)) * 0.2 ** t
     
@@ -137,28 +120,29 @@ class CfomDockLightning(pl.LightningModule):
             flag = torch.zeros_like(data.label,device=data.label.device)+1
 
         logits = self.model(
-            data.core_tokens,
-            data.split_sidechain_tokens[:, :-1],
+            None,
+            data['ligand'].frag_tokens[:, :-1],
             data,
             (data.activity_type, flag), 
             molecule_sidechain_mask_idx=1
         )
         logits = logits.transpose(1, -1)
-        tgt = data.split_sidechain_tokens[:, 1:]
+        tgt = data['ligand'].frag_tokens[:, 1:]
         losses = self.loss(logits, tgt)
         if self.handle_inactive in ('penalty','hide'):
-            good_spots = torch.nonzero(data.label.repeat_interleave(data.num_sidechains)==1, as_tuple=True)[0]
-            bad_spots = torch.nonzero(data.label.repeat_interleave(data.num_sidechains)==0, as_tuple=True)[0]
+            good_spots = torch.nonzero(data.label.repeat_interleave(data['ligand'].num_frags)==1, as_tuple=True)[0]
+            bad_spots = torch.nonzero(data.label.repeat_interleave(data['ligand'].num_frags)==0, as_tuple=True)[0]
             
             recon_loss = losses.mean()
             if len(good_spots) == 0 or len(bad_spots) == 0:
                 active_loss = losses[good_spots].mean().nan_to_num(0)
                 inactive_loss = losses[bad_spots].mean().nan_to_num(0)
                 return recon_loss, {'recon':recon_loss, 'active':active_loss, 'inactive': inactive_loss}
-            good_spots, bad_spots = self.extend_tensors(good_spots,bad_spots)
+            # good_spots, bad_spots = self.extend_tensors(good_spots,bad_spots)
             # maybe use distances
-            active_loss = losses[good_spots].mean(1)
-            inactive_loss = losses[bad_spots].mean(1)
+            
+            active_loss = losses[good_spots].mean(1).unsqueeze(0)
+            inactive_loss = losses[bad_spots].mean(1).unsqueeze(-1)
             
             margin = 0.05
             margin_loss = F.relu(margin + active_loss - inactive_loss).mean()
@@ -203,16 +187,13 @@ class CfomDockLightning(pl.LightningModule):
         loss, loss_dict = self.get_loss(data)
         # loss_weights = data.label * alpha + (1- data.label) * (1-alpha)
         # loss = loss * loss_weights.unsqueeze(-1)
-        if self.handle_inactive in ('penalty','hide'):
-            self.log("train_loss", loss,prog_bar=True, sync_dist=True)
-            for k,v in loss_dict.items():
-                self.log(f"train_loss_{k}",v, sync_dist=True)
-        else:
-            self.log("train_loss", loss,prog_bar=True, sync_dist=True)
+        self.log("train_loss", loss,prog_bar=True, sync_dist=True)
+        for k,v in loss_dict.items():
+            self.log(f"train_loss_{k}",v, sync_dist=True)
         # self.log("alpha", alpha, )
         return loss
             
-            
+           
     def generate_samples(self, data):
         mols_sidechains_batches = self.model.optimized_generate_samples(
             self.num_gen_samples,
@@ -223,7 +204,7 @@ class CfomDockLightning(pl.LightningModule):
         )
         # we want to genenerate good samples so we give label=1
         new_mols = []
-        for core, old_smile, task, mol_sidechains_batches in zip(data.core_smiles, data.smiles, data.task, mols_sidechains_batches):
+        for core, old_smile, task, mol_sidechains_batches in zip(data['ligand'].core_smiles, data['ligand'].smiles, data.task, mols_sidechains_batches):
             for chains in zip(*mol_sidechains_batches):
                 # chains = self.tokenizer.decode_batch(chains, skip_special_tokens=True)
                 chains = [f'[{i+1}*]{ch}' for i,ch in enumerate(chains)]
@@ -246,30 +227,26 @@ class CfomDockLightning(pl.LightningModule):
 
     def validation_step(self, graph, batch_idx):
         loss, loss_dict = self.get_loss(graph)
-        if self.handle_inactive in ('penalty','hide'):
-            self.log("valid_loss", loss,batch_size=len(graph), sync_dist=True)
-            for k,v in loss_dict.items():
-                self.log(f"valid_loss_{k}",v,batch_size=len(graph), sync_dist=True)
-        else:
-            self.log("valid_loss", loss,batch_size=len(graph), sync_dist=True)
+        self.log("valid_loss", loss,batch_size=len(graph), sync_dist=True)
+        for k,v in loss_dict.items():
+            self.log(f"valid_loss_{k}",v,batch_size=len(graph), sync_dist=True)
         if not self.validation_clfs:
             return
         if graph.label.all().item() == True: # all active
             return
-        if graph.label.all().any() == True: # exist active and inactive
+        if graph.label.any() == True: # exist active and inactive
             # filter actives
             gs = graph.to_data_list()
             gs = list(filter(lambda x: not x.label.item(), gs))
             graph = type(graph).from_data_list(gs)
         
         gen_res = self.generate_samples(graph)
+        
         for (task_name, new_sm, old_sm, new_fp) in gen_res:
             self.eval_step_outputs[task_name][old_sm].append((new_sm, new_fp))
+        
 
     def test_step(self, graph, batch_idx):
-        if not self.test_clfs:
-            return
-        
         gen_res = self.generate_samples(graph)
         for (task_name, new_sm, old_sm, new_fp) in gen_res:
             self.eval_step_outputs[task_name][old_sm].append((new_sm, new_fp))
@@ -286,8 +263,8 @@ class CfomDockLightning(pl.LightningModule):
                 num_molecules += 1
                 if new_sm is not None and new_sm != old_sm:
                     all_valid_samples.append(new_sm)
-        
         for _ in range(self.num_gen_samples):
+            
             chosen_mols, similarities, tot_success, scores = [], [], 0, []
             for old_sm in opt_molecules.keys():
                 candidates = [
@@ -308,18 +285,19 @@ class CfomDockLightning(pl.LightningModule):
                 cur_score = cur_score[0][1]
                 scores.append(cur_score)
                 if log:
-                    self.log('1_score', cur_score, sync_dist=True)
+                    self.log('1_score', cur_score, sync_dist=False)
                 if cur_score > threshold and cur_sim > similarity_threshold:
                     tot_success += 1
                     if log:
-                        self.log('1_success', 1, sync_dist=True)
+                        self.log('1_success', 1, sync_dist=False)
                 else:
                     if log:
-                        self.log('1_success', 0, sync_dist=True)
+                        self.log('1_success', 0, sync_dist=False)
             all_success_rates.append(tot_success / len(opt_molecules.keys()))
             all_diversities.append(len(set(chosen_mols)) / max(1, len(chosen_mols)))
             all_similarities.append(sum(similarities) / max(1, len(chosen_mols)))
             all_scores.append(sum(scores) / max(1, len(chosen_mols)))
+        
         avg_diversity, std_diversity = np.mean(all_diversities), np.std(all_diversities)
         avg_similarity, std_similarity = np.mean(all_similarities), np.std(
             all_similarities
@@ -329,6 +307,7 @@ class CfomDockLightning(pl.LightningModule):
         )
         avg_success, std_success = np.mean(all_success_rates), np.std(all_success_rates)
         validity = len(all_valid_samples) / num_molecules
+        
         return (
             validity,
             avg_diversity,
@@ -361,7 +340,8 @@ class CfomDockLightning(pl.LightningModule):
                     for new_mol,_ in opt_molecules[orig_mol]:
                         if new_mol is not None:
                             f.write(f'{orig_mol} {new_mol}\n')
-        
+        if not self.test_clfs:
+            return
         results = defaultdict(list)
         for task_name in sorted(self.eval_step_outputs.keys()):
             opt_molecules = self.eval_step_outputs[task_name]
@@ -417,24 +397,24 @@ class CfomDockLightning(pl.LightningModule):
                 self.validation_clfs[task_name][1],
                 self.similarity_threshold,
             )
-            self.log(f"{task_name}_validity", validity, sync_dist=True)
-            self.log(f"{task_name}_diversity", avg_diversity, sync_dist=True)
-            # self.log(f"{task_name}_std_diversity", std_diversity, sync_dist=True)
-            self.log(f"{task_name}_similarity", avg_similarity, sync_dist=True)
-            # self.log(f"{task_name}_std_similarity", std_similarity, sync_dist=True)
-            self.log(f"{task_name}_success", avg_success, sync_dist=True)
-            # self.log(f"{task_name}_std_success", std_success, sync_dist=True)
-            self.log(f"{task_name}_score", avg_score, sync_dist=True)
+            # self.log(f"{task_name}_validity", validity, sync_dist=False)
+            # self.log(f"{task_name}_diversity", avg_diversity, sync_dist=False)
+            # # self.log(f"{task_name}_std_diversity", std_diversity, sync_dist=False)
+            # self.log(f"{task_name}_similarity", avg_similarity, sync_dist=False)
+            # # self.log(f"{task_name}_std_similarity", std_similarity, sync_dist=False)
+            # self.log(f"{task_name}_success", avg_success, sync_dist=False)
+            # # self.log(f"{task_name}_std_success", std_success, sync_dist=False)
+            # self.log(f"{task_name}_score", avg_score, sync_dist=False)
             
             tot_avg_success.append(avg_success)
             tot_score.append(avg_score)
-        self.log("validation_avg_success", sum(tot_avg_success) / max(len(tot_avg_success), 1), sync_dist=True)
-        self.log("validation_avg_score", sum(tot_score) / max(1, len(tot_score)), sync_dist=True)
+        self.log("validation_avg_success", sum(tot_avg_success) / max(len(tot_avg_success), 1), sync_dist=False)
+        self.log("validation_avg_score", sum(tot_score) / max(1, len(tot_score)), sync_dist=False)
         self._reset_eval_step_outputs()
 
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, min_lr=self.lr / 100)
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, min_lr=self.lr / 100, patience=1)
         return {
                         "optimizer": optimizer,
                         "lr_scheduler": sched,

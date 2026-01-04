@@ -31,7 +31,7 @@ def group(xs: List[Tensor], aggr: Optional[str]) -> Optional[Tensor]:
         return out
 
 
-class PGHTConv2(MessagePassing):
+class PGHTConv3(MessagePassing):
     def __init__(
         self,
         in_channels: Union[int, Dict[str, int]],
@@ -41,13 +41,12 @@ class PGHTConv2(MessagePassing):
         num_attn_groups: int = 2,
         dropout = 0.1,
         distance_scaling: bool = False,
-        coords_update: bool = False,
         **kwargs,
     ):
         super().__init__(aggr='add', node_dim=0, **kwargs)
 
         assert out_channels % num_attn_groups == 0 , 'out_channels must be divisible by num_attn_groups'
-
+        self.dropout = nn.Dropout(dropout)
         self.in_channels = in_channels
         self.edge_in_channels = edge_in_channels
         self.out_channels = out_channels
@@ -57,38 +56,42 @@ class PGHTConv2(MessagePassing):
         self.k_lin = nn.Sequential(
             nn.Linear(in_channels, out_channels),
             nn.BatchNorm1d(out_channels, affine=False),
-            nn.ReLU(),
+            self.dropout,
+            nn.SiLU(),
+            nn.Linear(out_channels, out_channels),
+            
         )
         self.q_lin = nn.Sequential(
             nn.Linear(full_edge_in_ch, out_channels),
             nn.BatchNorm1d(out_channels, affine=False),
-            nn.ReLU(),
+            self.dropout,
+            nn.SiLU(),
+            nn.Linear(out_channels, out_channels),
         )
         self.v_lin = Linear(full_edge_in_ch, out_channels)
 
         self.weight_encoding = nn.Sequential(
             nn.Linear(out_channels, num_attn_groups),
             nn.BatchNorm1d(num_attn_groups),
-            nn.ReLU(),
+            self.dropout,
+            nn.SiLU(),
             nn.Linear(num_attn_groups, num_attn_groups)
         )
         
-        self.update_coords = coords_update
-        if self.update_coords:
-            self.coord_weight_encoding = nn.Sequential(
-                nn.Linear(out_channels, out_channels),
-                nn.BatchNorm1d(out_channels),
-                nn.ReLU(),
-                nn.Linear(out_channels, 1),
-            )
+        self.node_mlp = nn.Sequential(
+            nn.Linear(out_channels, out_channels),
+            nn.BatchNorm1d(out_channels),
+            self.dropout,
+            nn.SiLU(),
+            nn.Linear(out_channels, out_channels)
+        )
 
-        self.out_lin = Linear(out_channels, out_channels)
+            
+
         self.identity_lin = Linear(in_channels, out_channels) if in_channels != out_channels else None
         self.norm_input = nn.BatchNorm1d(in_channels)
-        self.norm_output = nn.BatchNorm1d(out_channels)
 
         self.reset_parameters()
-        self.attn_drop = nn.Dropout(dropout)
         self.act = nn.ReLU()
         
         self.distance_scaling = distance_scaling
@@ -98,7 +101,7 @@ class PGHTConv2(MessagePassing):
         reset(self.k_lin)
         reset(self.q_lin)
         reset(self.v_lin)
-        reset(self.out_lin)
+        reset(self.node_mlp)
 
     def forward(
         self,
@@ -125,7 +128,7 @@ class PGHTConv2(MessagePassing):
         """
 
         node_attr = self.norm_input(node_attr)
-        node_attr = self.act(node_attr)
+        # node_attr = self.act(node_attr)
         
         # propagate_type: (v: Tensor, coords: Tensor, e: Tensor)
         out = self.propagate(
@@ -136,21 +139,15 @@ class PGHTConv2(MessagePassing):
                 e=edge_attr,
             )
         
-        if self.update_coords:
-            out, coord_updates = out[:, :self.out_channels], out[:, self.out_channels:]
-            new_coords = coords + coord_updates
-            ligand_mask = data.node_type == data._node_type_names.index('ligand')
-            coords[ligand_mask] = new_coords[ligand_mask]
-            data.pos = coords
         
-        out = self.out_lin(F.relu(out))
-        out = self.norm_output(out)
+        
+        out = self.node_mlp(out)
         identity = node_attr
         if out.size(-1) != identity.size(-1):
             identity = self.identity_lin(identity)
 
         out = out + identity
-        out = self.act(out)
+        # out = self.act(out)
         return out
 
 
@@ -165,22 +162,16 @@ class PGHTConv2(MessagePassing):
         q = self.q_lin(v_i_e_v_j)
         v = self.v_lin(v_i_e_v_j)
 
-        weight = self.attn_drop(self.weight_encoding(q - k))
+        weight = self.weight_encoding(q - k)
         if self.distance_scaling:
-            dists = (coords_i - coords_j).norm()
+            dists = (coords_i - coords_j).norm(dim=-1, keepdim=True)
             weight  *= 1/(1+dists)
         weight = softmax(weight, index, ptr, size_i)
-        if self.update_coords:
-            coord_weight = self.attn_drop(self.coord_weight_encoding(q-k)) 
-            coord_weight = softmax(coord_weight, index, ptr, size_i)
-            coord_diff = (coords_j - coords_i) * coord_weight
-            
             
         
         out = (v).view(-1, self.num_attn_groups, self.out_channels // self.num_attn_groups) * weight.unsqueeze(-1)
         out = out.view(-1, self.out_channels)
-        if self.update_coords:
-            return torch.concat([out, coord_diff],dim=-1)
+       
         return out
 
     def __repr__(self) -> str:

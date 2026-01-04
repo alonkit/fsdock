@@ -3,6 +3,8 @@ from rdkit import Chem
 import torch.nn as nn
 import torch.nn.functional as F
 
+from models.graph_encoder import GraphEncoder
+
 
 class CfomDock(nn.Module):
     def __init__(
@@ -10,7 +12,7 @@ class CfomDock(nn.Module):
         transformer_encoder,
         transformer_decoder,
         interaction_encoder,
-        graph_encoder,
+        graph_encoder: GraphEncoder,
         add_hole_heighbours=False,
         use_receptors=True
     ):
@@ -53,39 +55,6 @@ class CfomDock(nn.Module):
         smiles_padding_mask = smiles_padding_mask[:, ~smiles_padding_mask.all(0)]
         return smiles_memory, smiles_padding_mask
 
-    def _get_local_clusters_vecs(self, g, cluster_centers_idxs, c_name, amount):
-        edge_index = g['ligand',c_name].edge_index
-        edges_with_centers = torch.isin(edge_index[0], cluster_centers_idxs)
-        edge_len = g['ligand'].pos[edge_index[0][edges_with_centers]] - g[c_name].pos[edge_index[1][edges_with_centers]]
-        edge_len = torch.norm(edge_len, dim=1)
-        groups = edge_index[0][edges_with_centers]
-        clusters = []
-        for idx in cluster_centers_idxs:
-            curr_edge_len = edge_len[groups == idx]
-            closest_in_cluster = torch.argsort(curr_edge_len)[:amount]
-            idxs = edge_index[1][edges_with_centers][groups == idx][closest_in_cluster]
-            node_vecs = g[c_name].x[idxs]
-            edge_vecs = g['ligand',c_name].edge_attr[edges_with_centers][groups == idx][closest_in_cluster]
-            center_vec = g['ligand'].x[idx].repeat(node_vecs.shape[0],1)
-            cluster = torch.cat([node_vecs, edge_vecs, center_vec], dim=1)
-            if cluster.shape[0] < amount:
-                cluster = torch.cat([cluster, torch.zeros(amount - cluster.shape[0], cluster.shape[1], device=cluster.device)], dim=0)
-            clusters.append(cluster)
-        return clusters
-        
-    def _collect_local_clusters(self, graph_data, cluster_centers_idxs):
-        if not self.add_hole_heighbours:
-            clusters = graph_data['ligand'].x[cluster_centers_idxs]
-            return clusters.unsqueeze(1)
-
-        lig_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'ligand', 10)
-        rec_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'receptor', 30)
-        atom_clusters = self._get_local_clusters_vecs(graph_data, cluster_centers_idxs, 'atom', 20)
-        clusters = []
-        for l,r,c in zip(lig_clusters, rec_clusters, atom_clusters):
-            clusters.append(torch.cat([l,r,c], dim=0).unsqueeze(0))
-        return torch.cat(clusters)
-        
 
     def _create_graph_memory(self, graph_data, molecule_sidechain_mask_idx):
         if self.graph_encoder is None:
@@ -97,18 +66,40 @@ class CfomDock(nn.Module):
             del graph_data['atom','receptor']
             del graph_data['ligand','receptor']
 
-        neighbor_idxs = graph_data.hole_neighbors + graph_data["ligand"].ptr[
-            :-1
-        ].repeat_interleave(graph_data.num_sidechains)
-        neighbor_idxs = self.graph_encoder.get_new_indexes_after_masking(
-            graph_data, neighbor_idxs, molecule_sidechain_mask_idx
-        )
-        masked_graph_data = self.graph_encoder.mask_graph_sidechains(
-            graph_data, molecule_sidechain_mask_idx
-        )
+        masked_graph_data = self.prep_graph(graph_data)
         encoded_graph = self.graph_encoder(masked_graph_data, keep_hetrograph=True)
-        graph_memory = self._collect_local_clusters(encoded_graph, neighbor_idxs)
+        graph_memory = encoded_graph['ligand'].x[graph_data['ligand'].frag_hole][:,None,:]
         return graph_memory, torch.zeros(graph_memory.shape[0], graph_memory.shape[1]).bool().to(graph_memory.device)
+
+    def prep_graph(self, graph):
+        graph = graph.clone()
+        self.fix_graph_batch_idxs(graph)
+        
+        self.mask_fragments(graph)
+        graph = self.graph_encoder.embed_graph(graph)
+        graph = self.graph_encoder.undirect_graph(graph)
+        return graph
+    
+    def mask_edges_between(self, graph, src_key,dst_key):
+        edge_index = graph[src_key, dst_key].edge_index
+        frag_mask = ~graph['ligand'].core_mask
+        if src_key == dst_key and src_key == "ligand":
+            mask = frag_mask[edge_index]
+            mask = (mask[0] | mask[1]) # one of the nodes is in fragment
+        else:
+            # mask edges that start at sidechains and connect to the protein
+            mask = frag_mask[edge_index[0]]
+        edge_index = edge_index[:,~mask]
+        graph[src_key, dst_key].edge_index = edge_index
+        if "edge_attr" in graph[src_key, dst_key]:
+            edge_attr = graph[src_key, dst_key].edge_attr
+            edge_attr = edge_attr[~mask]
+            graph[src_key, dst_key].edge_attr = edge_attr
+    
+    def mask_fragments(self, graph):
+        self.mask_edges_between(graph, "ligand", "ligand")
+        self.mask_edges_between(graph, "ligand", "receptor")
+        self.mask_edges_between(graph, "ligand", "atom")
 
     def _create_interaction_memory(self, interaction_data, num_sidechains):
         if self.interaction_encoder is None:
@@ -140,7 +131,7 @@ class CfomDock(nn.Module):
             graph_data, molecule_sidechain_mask_idx
         )
         interaction_memory, interaction_padding_mask = self._create_interaction_memory(
-            interaction_data, graph_data.num_sidechains
+            interaction_data, graph_data['ligand'].num_frags
         )
 
         # Concatenate encoder output with GNN output
@@ -184,9 +175,8 @@ class CfomDock(nn.Module):
         molecule_sidechain_mask_idx=1,
         **kwargs
     ):
-        core_tokens = graph_data.core_tokens
         combined_memory, memory_padding_mask = self._create_memory(
-            core_tokens, graph_data, interaction_data, molecule_sidechain_mask_idx
+            None, graph_data, interaction_data, molecule_sidechain_mask_idx
         )
         sidechains_batches = []
         error_rate = 0
@@ -207,11 +197,24 @@ class CfomDock(nn.Module):
             sidechains_batches.append(chains[:num_samples]) 
         
         mols_sidechains_batches = []
-        splits = torch.cumsum(graph_data.num_sidechains, dim=0)
+        splits = torch.cumsum(graph_data['ligand'].num_frags, dim=0)
         for src, dst in zip([0,*splits[:-1]], [*splits]):
             mols_sidechains_batches.append(sidechains_batches[src:dst])
         return mols_sidechains_batches        
 
+    def fix_graph_batch_idxs(self,graph):
+        device = graph['ligand'].frag_idxs.device
+        new_frag_idxs = graph['ligand'].frag_idxs + (
+            torch.concat([
+                torch.tensor([0], device=device), 
+                graph['ligand'].num_frags[:-1]
+            ], 0).cumsum(0).repeat_interleave(graph['ligand'].ptr[1:] - graph['ligand'].ptr[:-1])
+        )
+        new_frag_idxs[graph['ligand'].core_mask] = -1
+        graph['ligand'].frag_idxs = new_frag_idxs
+        new_frag_hole = graph['ligand'].frag_hole + graph['ligand'].ptr[:-1].repeat_interleave(graph['ligand'].num_frags)
+        graph['ligand'].frag_hole = new_frag_hole
+        
     def forward(
         self,
         smiles_tokens_src,
@@ -221,6 +224,7 @@ class CfomDock(nn.Module):
         molecule_sidechain_mask_idx=1,
     ):
 
+        
         combined_memory, memory_padding_mask = self._create_memory(
             smiles_tokens_src, graph_data, interaction_data, molecule_sidechain_mask_idx
         )

@@ -91,7 +91,7 @@ lightning:
   _target_: "models.cfom_dock_lightning.CfomDockLightning"
   lr: 1e-4
   weight_decay: 1e-4
-  num_gen_samples: 10
+  num_gen_samples: 20
   handle_inactive: penalty
 
 train:

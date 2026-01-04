@@ -58,6 +58,9 @@ class GraphEmbedder(nn.Module):
                 "atom": atom_encoder_class(
                     emb_dim=prot_emd_dim, feature_dims=atom_feature_dims
                 ),
+                "frag": atom_encoder_class(
+                    emb_dim=lig_emb_dim, feature_dims=([1],0)
+                ),
             }
         )
         self.edge_embedders = nn.ModuleDict(
@@ -86,6 +89,17 @@ class GraphEmbedder(nn.Module):
                 self._to_key("atom", "receptor"): self.create_edge_embedding(
                     in_dim=distance_embed_dim, out_dim=prot_emd_dim, dropout=dropout
                 ),
+                ##################
+                self._to_key("ligand", "frag"): self.create_edge_embedding(
+                    in_dim=distance_embed_dim, out_dim=prot_emd_dim, dropout=dropout
+                ),
+                self._to_key("frag", "receptor"): self.create_edge_embedding(
+                    in_dim=distance_embed_dim, out_dim=prot_emd_dim, dropout=dropout
+                ),
+                self._to_key("frag", "atom"): self.create_edge_embedding(
+                    in_dim=distance_embed_dim, out_dim=prot_emd_dim, dropout=dropout
+                ),
+                
             }
         )
 

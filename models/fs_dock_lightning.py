@@ -1,35 +1,21 @@
-from collections import defaultdict
-import copy
 from datetime import datetime
-import random
-import numpy as np
-import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.utils.data
-from torch import nn
 from torch.optim import Adam
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
-from pytorch_lightning.callbacks import ModelCheckpoint
 from sklearn.metrics import roc_auc_score, average_precision_score
 
 
 from datasets.custom_distributed_sampler import CustomDistributedSampler, CustomTaskDistributedSampler
-from datasets.fsmol_dock import FsDockDataset
-from datasets.fsmol_dock_clf import FsDockClfDataset
 from datasets.partitioned_fsmol_dock import FsDockDatasetPartitioned
 from datasets.process_chem.process_sidechains import (
     calc_tani_sim,
     get_fp,
     reconstruct_from_core_and_chains,
 )
-from models.cfom_dock import CfomDock
 from models.graph_encoder import GraphEncoder
-from utils.logging_utils import configure_logger, get_logger
-from rdkit import Chem
-from torchmetrics import ROC, AUROC
-from models.protonet.protonet import PrototypicalNetwork
 
 class FSDockLightning(pl.LightningModule):
     def __init__(
