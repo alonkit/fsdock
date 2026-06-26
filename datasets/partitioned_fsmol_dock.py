@@ -27,11 +27,11 @@ from datasets.process_chem.process_mols import (
     moad_extract_receptor_structure,
     read_molecule,
     get_binding_pockets,
-    get_sub_prot_for_ligs
+    get_sub_prot_for_lig, add_frag_place_holder, mask_fragments, filter_unconnected_protein_nodes
 )
 from esm import FastaBatchedDataset, pretrained
 
-from datasets.process_chem.process_sidechains import get_core_and_chains, get_holes, get_mol_smiles, add_frag_place_holder
+from datasets.process_chem.process_sidechains import get_core_and_chains, get_holes, get_mol_smiles 
 from utils.esm_utils import compute_ESM_embeddings
 from utils.logging_utils import get_logger
 from utils.map_file_manager import MapFileManager, load_objects_concurrently
@@ -65,6 +65,7 @@ class FsDockDatasetPartitioned(Dataset):
         load_mols=False,
         random_max_angle=None,
         core_weight=0.5,
+        frag_radius={}
     ):
         if isinstance(tasks, str):
             tasks = pd.read_csv(tasks)
@@ -94,6 +95,7 @@ class FsDockDatasetPartitioned(Dataset):
         self._indices = metadata['indices']
         self.tasks_target = metadata['tasks_target']
         self.random_max_angle = random_max_angle
+        self.frag_radius = frag_radius
         # if not self.tasks:
         #     self.load()
             
@@ -134,9 +136,9 @@ class FsDockDatasetPartitioned(Dataset):
     def connect_ligand_to_protein(self, task_name, idx, data):
         task = self.tasks[task_name]
         protein_graph = self.protein_graphs[task["target"]]
-        sub_protein = get_sub_prot_for_ligs(
-                    protein_graph, [data], self.ligand_radius, self.atom_radius
-                )[0]
+        sub_protein = get_sub_prot_for_lig(
+                    protein_graph, data, self.ligand_radius, self.atom_radius
+                )
         # sub_protein = self.sub_proteins.load(f'{task["name"]}_{idx}')
         rec_id, lig_rec, rec_rec, atom_id, lig_atom, atom_atom, atom_rec = sub_protein
         data["receptor"].x = protein_graph["receptor"].x[rec_id]
@@ -155,23 +157,23 @@ class FsDockDatasetPartitioned(Dataset):
     def len(self):
         return len(self._indices)
 
-    def _create_sub_task(self, task, idxs):
-        sub_task = {}
-        for key, value in task.items():
-            if isinstance(value, str) or not isinstance(value, Iterable):
-                sub_task[key] = value
-            else:
-                if key == "graphs":
-                    sub_task[key] = []
-                    for i in idxs:
-                        graph = deepcopy(task["graphs"][i])
-                        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
-                        self.connect_ligand_to_protein(task["name"], i, graph)
-                        self.tokenize_smiles(graph)
-                        sub_task[key].append(graph)
-                else:
-                    sub_task[key] = deepcopy([value[i] for i in idxs])
-        return sub_task
+    # def _create_sub_task(self, task, idxs):
+    #     sub_task = {}
+    #     for key, value in task.items():
+    #         if isinstance(value, str) or not isinstance(value, Iterable):
+    #             sub_task[key] = value
+    #         else:
+    #             if key == "graphs":
+    #                 sub_task[key] = []
+    #                 for i in idxs:
+    #                     graph = deepcopy(task["graphs"][i])
+    #                     graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
+    #                     self.connect_ligand_to_protein(task["name"], i, graph)
+    #                     self.tokenize_smiles(graph)
+    #                     sub_task[key].append(graph)
+    #             else:
+    #                 sub_task[key] = deepcopy([value[i] for i in idxs])
+    #     return sub_task
 
     def __getitem__(self, idx):
         if isinstance(idx, tuple):
@@ -190,7 +192,9 @@ class FsDockDatasetPartitioned(Dataset):
         graph['ligand'].frag_idxs = torch.from_numpy(graph['ligand'].frag_idxs)
         graph['ligand'].core_mask = torch.from_numpy(graph['ligand'].core_mask)
         self.connect_ligand_to_protein(self.tasks[task_name]["name"], i, graph)
-        graph = add_frag_place_holder(graph)
+        graph = add_frag_place_holder(graph, self.frag_radius)
+        graph = mask_fragments(graph)
+        graph = filter_unconnected_protein_nodes(graph)
         self.tokenize_smiles(graph)
         return graph
 

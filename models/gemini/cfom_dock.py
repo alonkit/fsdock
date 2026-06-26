@@ -9,18 +9,19 @@ from rdkit import Chem
 
 class CfomDockGemini(CfomDock):
     
-    def __init__(self, *args,**kws):
+    def __init__(self, use_cvae=True,*args,**kws):
         super().__init__(*args,**kws)    
         self.memory_scaler = torch.nn.Linear(
             self.graph_encoder.edge_channels+self.graph_encoder.out_channels, 
             self.graph_encoder.out_channels)
         
         self.decoder_input_dropout = torch.nn.Dropout(0.3)
-        
-        self.cvae = CVAE(
-            d_model=self.graph_encoder.out_channels,
-            d_latent=32,
-        )
+        self.use_cvae = use_cvae
+        if use_cvae:
+            self.cvae = CVAE(
+                d_model=self.graph_encoder.out_channels,
+                d_latent=32,
+            )
     
     def _create_graph_memory(self, graph_data, molecule_sidechain_mask_idx):
         if self.graph_encoder is None:
@@ -31,6 +32,7 @@ class CfomDockGemini(CfomDock):
             del graph_data['receptor','receptor']
             del graph_data['atom','receptor']
             del graph_data['ligand','receptor']
+            del graph_data['frag','receptor']
 
         graph_data = self.prep_graph(graph_data)
         encoded_graph = self.graph_encoder(graph_data, keep_hetrograph=True)
@@ -64,7 +66,8 @@ class CfomDockGemini(CfomDock):
         mems = []
         for hole_idx in range(graph_data['frag'].x.shape[0]):
             curr_mems = []
-            for tgt_type in ['ligand','receptor', 'atom']:
+            tgts = ['ligand','receptor', 'atom'] if self.use_receptors else ['ligand','atom']
+            for tgt_type in tgts:
                 ei = graph_data['frag',tgt_type].edge_index
                 relevant = ei[0]==hole_idx
                 ei = ei[:,relevant]
@@ -125,9 +128,12 @@ class CfomDockGemini(CfomDock):
                 memory = combined_memory[i].repeat(num_samples, 1,1)
                 c_bos = bos[i].repeat(num_samples,1)
                 mask = memory_padding_mask[i].repeat(num_samples, 1)
-                c_bos, kld_loss = self.cvae(
-                    c_bos, None, training=False
-                )
+                if self.use_cvae:
+                    c_bos, kld_loss = self.cvae(
+                        c_bos, None, training=False
+                    )
+                else:
+                    kld_loss = torch.tensor(0.0, device=c_bos.device)
                 batch_samples = self.decoder.generate(c_bos, memory, mask, **kwargs).cpu().numpy()
                 gen_chains = tokenizer.decode_batch(batch_samples, skip_special_tokens=True)
                 good_chains = [c for c in gen_chains if Chem.MolFromSmiles(f'[1*]{c}') is not None]
@@ -152,19 +158,23 @@ class CfomDockGemini(CfomDock):
         molecule_sidechain_mask_idx=1,
     ):
 
-        smiles_memory, smiles_padding_mask = self._create_text_memory(smiles_tokens_tgt)
         
         graph_tgt_start, combined_memory, memory_padding_mask = self._create_memory(
             smiles_tokens_src, graph_data, interaction_data, molecule_sidechain_mask_idx
         )
         
-        fragment_embedding = self.masked_mean_pooling(
-            smiles_memory, ~smiles_padding_mask        
-        )
-        graph_tgt_start, kld_loss = self.cvae(
-            graph_tgt_start, fragment_embedding, training=True
-        )
         
+        if self.use_cvae:
+            smiles_memory, smiles_padding_mask = self._create_text_memory(smiles_tokens_tgt)
+            fragment_embedding = self.masked_mean_pooling(
+                smiles_memory, ~smiles_padding_mask        
+            )
+            
+            graph_tgt_start, kld_loss = self.cvae(
+                graph_tgt_start, fragment_embedding, training=True
+            )
+        else:
+            kld_loss = torch.tensor(0.0, device=graph_tgt_start.device)
         
             
         output = self._train_decode(

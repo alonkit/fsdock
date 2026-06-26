@@ -98,7 +98,9 @@ class CfomDock(nn.Module):
     
     def mask_fragments(self, graph):
         self.mask_edges_between(graph, "ligand", "ligand")
-        self.mask_edges_between(graph, "ligand", "receptor")
+        if self.use_receptors:
+            self.mask_edges_between(graph, "ligand", "receptor")
+        # else: there are no receptor nodes
         self.mask_edges_between(graph, "ligand", "atom")
 
     def _create_interaction_memory(self, interaction_data, num_sidechains):

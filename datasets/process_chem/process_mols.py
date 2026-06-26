@@ -135,6 +135,7 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
     node_feat = torch.tensor(feature_list, dtype=torch.float32)
 
     lm_embeddings = torch.tensor(np.concatenate(lm_embeddings, axis=0)) if lm_embeddings is not None else None
+    lm_embeddings = lm_embeddings[:1022]
     complex_graph['receptor'].x = torch.cat([node_feat, lm_embeddings], axis=1) if lm_embeddings is not None else node_feat
     complex_graph['receptor'].pos = coords
     # complex_graph['receptor'].sidechain_vecs = sidechain_vecs.float()
@@ -180,7 +181,185 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
 
     return
 
-def get_sub_prot_for_ligs(
+def get_sub_prot_for_lig(
+    protein_graph, ligand_graph, rec_cutoff_distance, atom_cutoff_distance=None
+):
+    all_atoms = atom_cutoff_distance is not None
+    lig_pos = ligand_graph["ligand"].pos
+    
+    # 1. Find bipartite edges between the single ligand and the full protein
+    lig_rec = radius(
+        protein_graph["receptor"].pos,
+        lig_pos,
+        rec_cutoff_distance,
+        max_num_neighbors=9999,
+    )
+  
+    lig_atom = None
+    if all_atoms:
+        lig_atom = radius(
+            protein_graph["atom"].pos,
+            lig_pos,
+            atom_cutoff_distance,
+            max_num_neighbors=9999,
+        )
+
+    # 2. Grab full protein properties
+    rec_id = torch.arange(protein_graph["receptor"].pos.size(0), device=lig_pos.device)
+    rec_rec = protein_graph["receptor", "receptor"].edge_index
+    
+    atom_id = None
+    atom_atom = None
+    atom_rec = None
+    
+    if all_atoms:
+        atom_id = torch.arange(protein_graph["atom"].pos.size(0), device=lig_pos.device)
+        atom_atom = protein_graph["atom", "atom"].edge_index
+        atom_rec = protein_graph["atom", "receptor"].edge_index
+
+    # 3. Return the unaltered protein structure alongside the new ligand bipartite edges
+    return (rec_id, lig_rec, rec_rec, atom_id, lig_atom, atom_atom, atom_rec)
+
+def mask_edges_between(graph, src_key,dst_key):
+    edge_index = graph[src_key, dst_key].edge_index
+    frag_mask = ~graph['ligand'].core_mask
+    if src_key == dst_key and src_key == "ligand":
+        mask = frag_mask[edge_index]
+        mask = (mask[0] | mask[1]) # one of the nodes is in fragment
+    else:
+        # mask edges that start at sidechains and connect to the protein
+        mask = frag_mask[edge_index[0]]
+    edge_index = edge_index[:,~mask]
+    graph[src_key, dst_key].edge_index = edge_index
+    if "edge_attr" in graph[src_key, dst_key]:
+        edge_attr = graph[src_key, dst_key].edge_attr
+        edge_attr = edge_attr[~mask]
+        graph[src_key, dst_key].edge_attr = edge_attr
+
+def mask_fragments(graph):
+    mask_edges_between(graph, "ligand", "ligand")
+    if 'receptor' in graph.node_types:
+        mask_edges_between(graph, "ligand", "receptor")
+    # else: there are no receptor nodes
+    mask_edges_between(graph, "ligand", "atom")
+    return graph
+  
+def add_frag_place_holder(graph, frag_radius):
+    graph = graph.clone()
+    
+    # 1. Calculate Scaffold Center of Mass (CoM)
+    # Assuming -1 indicates the scaffold in your frag_idxs mapping
+    scaffold_mask = graph['ligand'].frag_idxs == -1
+    scaffold_pos = graph['ligand'].pos[scaffold_mask]
+    scaffold_com = scaffold_pos.mean(dim=0)
+    
+    # Position of the hole nodes
+    graph['frag'].pos = graph['ligand'].pos[graph['ligand'].frag_hole]
+    graph['frag'].x = torch.zeros(graph['frag'].pos.shape[0], 1, device=graph['ligand'].pos.device)
+    
+    # Connect ligand hole atom to the new 'frag' placeholder node
+    graph['ligand', 'frag'].edge_index = torch.cat([
+        graph['ligand'].frag_hole.unsqueeze(0), 
+        torch.arange(graph['ligand'].frag_hole.shape[0], device=graph['ligand'].pos.device).unsqueeze(0)
+    ], dim=0)
+
+    # 2. Iterate over destination types
+    for dst in ['atom', 'receptor']:
+        edges = []
+        # Assign dynamic cutoff: 10 Å for receptor atoms, 15 Å for alpha-carbon residues
+        cutoff = (10.0 if dst == 'atom' else 15.0) if dst not in frag_radius else frag_radius[dst]
+        dst_pos = graph[dst].pos
+        
+        # 3. Process each hole independently
+        for i in range(graph['ligand'].frag_hole.shape[0]):
+            hole_idx = graph['ligand'].frag_hole[i]
+            hole_pos = graph['ligand'].pos[hole_idx]
+            
+            # Define the directional vector pointing AWAY from the scaffold
+            outward_vec = hole_pos - scaffold_com
+            outward_vec = outward_vec / (torch.norm(outward_vec) + 1e-8)
+            
+            # Calculate vectors from the hole to all candidate protein nodes
+            target_vecs = dst_pos - hole_pos
+            distances = torch.norm(target_vecs, dim=1)
+            
+            # Normalize target vectors for the angle calculation
+            target_vecs_normalized = target_vecs / (distances.unsqueeze(1) + 1e-8)
+            
+            # Calculate dot product (cosine similarity) to find the angle
+            dot_products = torch.sum(target_vecs_normalized * outward_vec, dim=1)
+            
+            # Boolean masks for our two conditions: Distance and Outward Angle
+            dist_mask = distances <= cutoff
+            angle_mask = dot_products > 0  # > 0 means it points outward (angle < 90 degrees)
+            
+            # Combine masks
+            # valid_mask = dist_mask & angle_mask
+            valid_mask = dist_mask
+            valid_dst_indices = torch.where(valid_mask)[0]
+            
+            # Create edge index [source_hole_idx, target_dst_idx]
+            if len(valid_dst_indices) > 0:
+                src_indices = torch.full((len(valid_dst_indices),), i, dtype=torch.long, device=valid_dst_indices.device)
+                edge_index = torch.stack([src_indices, valid_dst_indices], dim=0)
+                edges.append(edge_index)
+
+        # Assign new edges to the graph
+        if len(edges) > 0:
+            graph['frag', dst].edge_index = torch.cat(edges, dim=1)
+        else:
+            # Handle edge case where no nodes match the criteria to avoid PyG dimension errors
+            graph['frag', dst].edge_index = torch.empty((2, 0), dtype=torch.long, device=graph['ligand'].pos.device)
+            
+    return graph
+    
+
+
+def filter_unconnected_protein_nodes(data):
+    # Define our node categories
+    ligand_types = {'ligand', 'frag'}
+    protein_types = {'receptor', 'atom'}
+    
+    # Dictionary to collect connected protein node indices
+    connected_protein_nodes = {ptype: [] for ptype in protein_types if ptype in data.node_types}
+    
+    # 1. Iterate through all edge types and find connections between ligands and proteins
+    for edge_type in data.edge_types:
+        src, rel, dst = edge_type
+        
+        # Case 1: Edge goes from Ligand -> Protein
+        if src in ligand_types and dst in protein_types:
+            connected_protein_nodes[dst].append(data[edge_type].edge_index[1])
+            
+        # Case 2: Edge goes from Protein -> Ligand
+        elif src in protein_types and dst in ligand_types:
+            connected_protein_nodes[src].append(data[edge_type].edge_index[0])
+
+    # 2. Build the dictionary of nodes to keep for subgraph generation
+    node_idx_dict = {}
+    
+    for node_type in data.node_types:
+        if node_type in protein_types:
+            # If it's a protein node, keep only the unique indices we found edges for
+            if connected_protein_nodes[node_type]:
+                all_connected = torch.cat(connected_protein_nodes[node_type])
+                node_idx_dict[node_type] = torch.unique(all_connected)
+            else:
+                # No edges to any ligand found, keep none of these nodes
+                node_idx_dict[node_type] = torch.tensor([], dtype=torch.long, device=data[node_type].pos.device)
+        else:
+            # If it's a ligand (or any other node type), keep all of them
+            node_idx_dict[node_type] = torch.arange(data[node_type].num_nodes, device=data[node_type].pos.device if hasattr(data[node_type], 'pos') else 'cpu')
+
+    # 3. Create and return the pruned subgraph
+    filtered_data = data.subgraph(node_idx_dict)
+    
+    return filtered_data
+
+
+
+
+def get_sub_prot_for_ligs_old(
     protein_graph, ligand_graphs, rec_cutoff_distance, atom_cutoff_distance=None
 ):
     all_atoms = atom_cutoff_distance is not None
@@ -267,9 +446,12 @@ def get_sub_prot_for_ligs(
     return sub_proteins
 
 
+
+
+
 def get_moad_atom_feats(res, coords):
     feats = []
-    res_long = aa_short2long[res]
+    res_long = aa_short2long[res] if res != "X" else "X"
     res_order = atom_order[res]
     for i, c in enumerate(coords):
         if np.any(np.isnan(c)):

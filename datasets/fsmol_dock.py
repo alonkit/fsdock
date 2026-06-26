@@ -26,11 +26,11 @@ from datasets.process_chem.process_mols import (
     moad_extract_receptor_structure,
     read_molecule,
     get_binding_pockets,
-    get_sub_prot_for_ligs
+    get_sub_prot_for_lig, add_frag_place_holder, mask_fragments, filter_unconnected_protein_nodes
 )
 from esm import FastaBatchedDataset, pretrained
 
-from datasets.process_chem.process_sidechains import add_frag_place_holder, get_core_and_chains, get_holes, get_mol_smiles
+from datasets.process_chem.process_sidechains import get_core_and_chains, get_holes, get_mol_smiles
 from utils.esm_utils import compute_ESM_embeddings
 from utils.logging_utils import get_logger
 from utils.map_file_manager import MapFileManager
@@ -65,6 +65,7 @@ class FsDockDataset(Dataset):
         core_weight=0.5,
         random_max_angle=None,
         random_translation=None,
+        frag_radius={}
     ):
         if isinstance(tasks, str):
             tasks = pd.read_csv(tasks)
@@ -79,6 +80,7 @@ class FsDockDataset(Dataset):
         self.atom_radius, self.atom_max_neighbors = atom_radius, atom_max_neighbors
         self.knn_only_graph = knn_only_graph
         self.core_weight = core_weight
+        self.frag_radius = frag_radius
         self.tasks_file = f"tasks_rh{remove_hs}_cw{core_weight}.pt"
         self.ligands_file = f"ligands_cw{core_weight}.pt"
         self.saved_protein_graph_file = f"protein_graphs_rr{receptor_radius}_camn{c_alpha_max_neighbors}_amn{atom_max_neighbors}_kog{knn_only_graph}_aa{all_atoms}_ar{atom_radius}.pt"
@@ -163,9 +165,9 @@ class FsDockDataset(Dataset):
             sub_protein = self.sub_proteins.load(f'{task["name"]}_{idx}')
         else: 
 
-            sub_protein = get_sub_prot_for_ligs(
-                    protein_graph, [data], self.ligand_radius, self.atom_radius
-                )[0]
+            sub_protein = get_sub_prot_for_lig(
+                    protein_graph, data, self.ligand_radius, self.atom_radius
+                )
         rec_id, lig_rec, rec_rec, atom_id, lig_atom, atom_atom, atom_rec = sub_protein
         data["receptor"].x = protein_graph["receptor"].x[rec_id]
         data["receptor"].pos = protein_graph["receptor"].pos[rec_id]
@@ -184,22 +186,23 @@ class FsDockDataset(Dataset):
         return len(self._indices)
 
     def _create_sub_task(self, task, idxs):
-        sub_task = {}
-        for key, value in task.items():
-            if isinstance(value, str) or not isinstance(value, Iterable):
-                sub_task[key] = value
-            else:
-                if key == "graphs":
-                    sub_task[key] = []
-                    for i in idxs: 
-                        graph = deepcopy(task["graphs"][i])
-                        graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
-                        self.connect_ligand_to_protein(task["name"], i, graph)
-                        self.tokenize_smiles(graph)
-                        sub_task[key].append(graph)
-                else:
-                    sub_task[key] = deepcopy([value[i] for i in idxs])
-        return sub_task
+        raise NotImplementedError("This method is not implemented yet, as it is not needed for the current implementation. It can be implemented if we want to support loading only a subset of the data for a task.")
+        # sub_task = {}
+        # for key, value in task.items():
+        #     if isinstance(value, str) or not isinstance(value, Iterable):
+        #         sub_task[key] = value
+        #     else:
+        #         if key == "graphs":
+        #             sub_task[key] = []
+        #             for i in idxs: 
+        #                 graph = deepcopy(task["graphs"][i])
+        #                 graph.sidechains_mask = torch.from_numpy(graph.sidechains_mask)
+        #                 self.connect_ligand_to_protein(task["name"], i, graph)
+        #                 self.tokenize_smiles(graph)
+        #                 sub_task[key].append(graph)
+        #         else:
+        #             sub_task[key] = deepcopy([value[i] for i in idxs])
+        # return sub_task
 
     def __getitem__(self, idx):
         if isinstance(idx, tuple):
@@ -220,7 +223,9 @@ class FsDockDataset(Dataset):
         graph['ligand'].frag_idxs = torch.from_numpy(graph['ligand'].frag_idxs)
         graph['ligand'].core_mask = torch.from_numpy(graph['ligand'].core_mask)
         self.connect_ligand_to_protein(self.tasks[task_name]["name"], i, graph)
-        graph = add_frag_place_holder(graph)
+        graph = add_frag_place_holder(graph, self.frag_radius)
+        graph = mask_fragments(graph)
+        graph = filter_unconnected_protein_nodes(graph)
         self.tokenize_smiles(graph)
         return graph
 

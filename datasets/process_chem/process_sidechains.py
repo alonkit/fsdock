@@ -77,6 +77,72 @@ def get_mol_smiles(mol):
         return Chem.CanonSmiles(mol)
     return Chem.MolToSmiles(mol)
 
+def transfer_coordinates(parent_mol, scaffold_mol):
+    """
+    Transfers coordinates from a parent molecule to a scaffold molecule.
+    """
+    dummy_pattern = Chem.MolFromSmarts('[#0]')
+    scaffold_mol = Chem.DeleteSubstructs(scaffold_mol, dummy_pattern)
+    # 1. Find how the scaffold maps onto the parent molecule
+    match = parent_mol.GetSubstructMatch(scaffold_mol)
+    
+    if not match:
+        raise ValueError(f"Scaffold ({Chem.MolToSmiles(scaffold_mol)}) is not a substructure of the parent molecule!")
+        
+    # 2. Get the conformer of the parent molecule
+    try:
+        parent_conf = parent_mol.GetConformer()
+    except ValueError:
+        raise ValueError("Parent molecule does not have any 3D/2D coordinates!")
+        
+    # 3. Create a new empty conformer for the scaffold
+    scaffold_conf = Chem.Conformer(scaffold_mol.GetNumAtoms())
+    
+    # Set the 3D flag to match the parent's flag
+    scaffold_conf.Set3D(parent_conf.Is3D())
+    
+    # 4. Transfer the coordinates atom-by-atom
+    # 'match' is a tuple where the index is the scaffold atom ID, 
+    # and the value is the corresponding parent atom ID.
+    for scaffold_idx, parent_idx in enumerate(match):
+        # Get the Point3D coordinate from the parent
+        pos = parent_conf.GetAtomPosition(parent_idx)
+        # Assign it to the scaffold's conformer
+        scaffold_conf.SetAtomPosition(scaffold_idx, pos)
+        atom = scaffold_mol.GetAtomWithIdx(scaffold_idx)
+        parent_atom = parent_mol.GetAtomWithIdx(parent_idx)
+        atom.SetIntProp("__origIdx", parent_atom.GetIntProp("__origIdx"))
+        
+    # 5. Add the conformer to the scaffold molecule
+    scaffold_mol.RemoveAllConformers() # Clear any dummy conformers just in case
+    scaffold_mol.AddConformer(scaffold_conf)
+    
+    return scaffold_mol
+
+def get_core_and_chains_from_scaffold(m1, scaf):
+    error = [None] * 3
+    if  isinstance(m1,str):
+        m1 = Chem.MolFromSmiles(m1)
+    if isinstance(scaf,str):
+        scaf = Chem.MolFromSmiles(scaf)
+    if m1 is None or scaf is None:
+        return error
+    for a in m1.GetAtoms():
+        a.SetIntProp("__origIdx", a.GetIdx())
+    # clean_core = MurckoScaffold.GetScaffoldForMol(m1)
+    clean_core = transfer_coordinates(m1, scaf)
+    if clean_core is None:
+        return error
+    
+    core, sidechains = _get_core_and_chains(m1, clean_core)
+    # core = Chem.ReplaceSidechains(m1, clean_core)
+    # sidechains = Chem.ReplaceCore(m1, clean_core)
+    # sidechains = [] if sidechains is None else list(Chem.GetMolFrags(sidechains, asMols=True))
+    if core is None or len(sidechains)==0:
+        return error
+    return clean_core, sidechains , get_slicing_data(m1,clean_core, core, sidechains)
+
+
 def get_core_and_chains(m1,core_weight):
     error = [None] * 3
     if  isinstance(m1,str):
@@ -373,40 +439,56 @@ def add_attachment_points(mol, n, seed=None, fg_weight=0, fg_list=[]):
     return mol, [], get_fake_slicing_data(current_mol, mol)
 
 
-def add_frag_place_holder(graph):
-    graph = graph.clone()
-    frag_idxs = graph['ligand'].frag_idxs
-    # centers = []
-    # for i in range(graph['ligand'].frag_hole.shape[0]):
-    #     mask = frag_idxs == i
-    #     if mask.sum() == 0:
-    #         continue
-    #     center = graph['ligand'].pos[mask].mean(0, keepdim=True)
-    #     centers.append(center)
-    # graph['frag'].pos = torch.cat(centers, dim=0)
-    graph['frag'].pos = graph['ligand'].pos[graph['ligand'].frag_hole]
+# def add_frag_place_holder(graph):
+#     graph = graph.clone()
+#     frag_idxs = graph['ligand'].frag_idxs
+#     # centers = []
+#     # for i in range(graph['ligand'].frag_hole.shape[0]):
+#     #     mask = frag_idxs == i
+#     #     if mask.sum() == 0:
+#     #         continue
+#     #     center = graph['ligand'].pos[mask].mean(0, keepdim=True)
+#     #     centers.append(center)
+#     # graph['frag'].pos = torch.cat(centers, dim=0)
+#     graph['frag'].pos = graph['ligand'].pos[graph['ligand'].frag_hole]
     
-    graph['frag'].x = torch.zeros(graph['frag'].pos.shape[0],1)
-    graph['ligand','frag'].edge_index = torch.cat([graph['ligand'].frag_hole.unsqueeze(0), torch.arange(graph['ligand'].frag_hole.shape[0]).unsqueeze(0)], dim=0)
-    #  edges
-    for dst in ['atom', 'receptor']:
-        edges = []
-        for i in range(graph['ligand'].frag_hole.shape[0]):
-            curr_frag_nodes = graph['ligand'].frag_idxs == i
-            fe = graph['ligand',dst].edge_index
-            fe = fe[:, curr_frag_nodes[fe[0]]]
-            fe[0] = i
-            edges.append(fe)
-        if len(edges)>0:
-            graph['frag', dst].edge_index = torch.cat(edges, dim=1)
-            
-            
-    return graph
-    
+#     graph['frag'].x = torch.zeros(graph['frag'].pos.shape[0],1)
+#     graph['ligand','frag'].edge_index = torch.cat([graph['ligand'].frag_hole.unsqueeze(0), torch.arange(graph['ligand'].frag_hole.shape[0]).unsqueeze(0)], dim=0)
+#     #  edges
+#     for dst in ['atom', 'receptor']:
+#         edges = []
+#         # take all edges from fragment and connect to hole.
+#         for i in range(graph['ligand'].frag_hole.shape[0]):
+#             curr_frag_nodes = graph['ligand'].frag_idxs == i
+#             fe = graph['ligand',dst].edge_index
+#             fe = fe[:, curr_frag_nodes[fe[0]]]
+#             fe[0] = i
+#             edges.append(fe)
         
-    
+#         # # take all edges from nearest ligand node and connect to hole.
+#         # for i,frag_idx in enumerate(graph['ligand'].frag_hole):
+#         #     curr_frag_nodes = torch.zeros(graph['ligand'].num_nodes).bool()
+#         #     curr_frag_nodes[frag_idx] = True
+#         #     fe = graph['ligand',dst].edge_index
+#         #     fe = fe[:, curr_frag_nodes[fe[0]]]
+#         #     fe[0] = i
+#         #     edges.append(fe)
+        
+        
+#         if len(edges)>0:
+#             graph['frag', dst].edge_index = torch.cat(edges, dim=1)
+            
+            
+#     return graph
+  
 
 if __name__ == '__main__':
+    
+    sdf_mol_file = '/home/alon.kitin/pmdm/crossdocked_pocket10/HDHA_ECOLI_1_255_0/1fmc_B_rec_1fmc_cho_lig_tt_docked_1.sdf'
+    ligand = Chem.SDMolSupplier(sdf_mol_file)[0]
+    scaf = '[*]C(C)C1CCC2C3C(=O)CC4CC(O)CCC4(C)C3CCC12C'
+    print(get_core_and_chains_from_scaffold(ligand, scaf))
+    exit()
     
     sdf_mol_file = '/home/alon.kitin/pmdm/crossdocked_pocket10/P2Y12_HUMAN_1_342_0/4pxz_A_rec_4pxz_6ad_lig_tt_min_0.sdf'
     ligand = Chem.SDMolSupplier(sdf_mol_file)[0]

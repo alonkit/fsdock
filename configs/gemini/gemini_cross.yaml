@@ -96,14 +96,6 @@ train:
     tasks: data/cross/valid_tasks.csv
     core_weight: 0.7
     ligand_radius: 10
-  # val_dataset:
-  #   _target_: datasets.fsmol_dock_clf.FsDockClfDataset
-  #   root: data/fsdock/clfs/valid
-  #   tasks: data/fsdock/valid_tasks.csv
-  #   only_inactive: false
-  #   core_weight: 0.7
-  #   min_roc_auc: 0.7
-  #   ligand_radius: 10
   corrupt_val_dataset:
     _target_: datasets.fsmol_dock.FsDockDataset
     root: data/cross/valid

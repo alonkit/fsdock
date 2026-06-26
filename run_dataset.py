@@ -15,6 +15,7 @@ import torch
 import os.path as osp
 
 from datasets.fsmol_dock_clf import FsDockClfDataset
+from datasets.fsmol_dock_custom_scafs import FsDockCustomDataset
 from datasets.partitioned_fsmol_dock import FsDockDatasetPartitioned
 from datasets.samplers import TaskRandomSampler, TaskSequentialSampler
 from datasets.task_data_loader import TaskDataLoader
@@ -45,6 +46,10 @@ def make_datasets(core_weight):
 
 
 if __name__ == "__main__":
+    # ds = FsDockCustomDataset('data/cross_reinvent/test','/home/alon.kitin/DiffDec/scaffolds/cross_reinvent_for_fsdock.csv', num_workers=torch.get_num_threads(), core_weight=0.7)
+    ds = FsDockCustomDataset('data/pose_reinvent/test','/home/alon.kitin/DiffDec/scaffolds/pose_reinvent_for_fsdock.csv', num_workers=torch.get_num_threads(), core_weight=0.7)
+    # ds = FsDockDataset('data/posebuster/test','data/posebuster/test_tasks.csv', num_workers=torch.get_num_threads(), core_weight=0.7)
+    exit()
     # ds = CrossPartitionedFsDockDataset(
     #     'data/cross/train','data/cross/train_tasks.csv', 
     #     num_workers=torch.get_num_threads(), core_weight=0.7,

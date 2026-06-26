@@ -35,9 +35,40 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "args": [
-                "configs/gemini/gemini_cross.yaml",
-                "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_22_23_29/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20031_epoch=39.ckpt"
-                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_16_07_37/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.11760_epoch=39.ckpt"
+                // "experiments/gemini_cross_no_receptors/2026_01_07_23_48/config.yaml",
+                // "experiments/gemini_cross_no_receptors/2026_01_07_23_48/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.16831_epoch=39.ckpt"
+                // "experiments/gemini_cross_no_groups/2026_01_07_23_34/config.yaml",
+                // "experiments/gemini_cross_no_groups/2026_01_07_23_34/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.15886_epoch=35.ckpt"
+                // "experiments/gemini_debug_cross_no_vae/2026_01_07_23_42/config.yaml",
+                // "experiments/gemini_debug_cross_no_vae/2026_01_07_23_42/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.18963_epoch=38.ckpt"
+
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/test_pose/config.yaml",
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_22_23_29/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20031_epoch=39.ckpt"
+
+                // "/home/alon.kitin/fs-dock/experiments/gemini_tmlr_prior_cross_frags/2026_03_21_17_54/config.yaml",
+                // "/home/alon.kitin/fs-dock/experiments/gemini_tmlr_prior_cross_frags/2026_03_21_17_54/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.28718_epoch=39.ckpt"
+
+                // "experiments/gemini_tmlr_esm_cross_frags/2026_03_22_18_52/config.yaml",
+                // "/home/alon.kitin/fs-dock/experiments/gemini_tmlr_esm_cross_frags/2026_03_22_18_52/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.19346_epoch=38.ckpt"                
+
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/test_cross_reinvent/config.yaml",
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_22_23_29/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20031_epoch=39.ckpt"
+            
+
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/test_pose_reinvent/config.yaml",
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_22_23_29/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20031_epoch=39.ckpt"
+            
+                // "/home/alon.kitin/fs-dock/experiments/gemini_cross_no_graph_hints/2026_06_06_18_50/config.yaml",
+                // "/home/alon.kitin/fs-dock/experiments/gemini_cross_no_graph_hints/2026_06_06_18_50/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.17324_epoch=39.ckpt"
+
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/test2/config.yaml",
+                // "/home/alon.kitin/fs-dock/experiments/gemini_debug_cross_frags/2025_12_22_23_29/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20031_epoch=39.ckpt"
+
+                // "/home/alon.kitin/fs-dock/experiments/gemini_cross_no_graph_hints_no_receptors/2026_06_12_02_53/config.yaml", 
+                // "/home/alon.kitin/fs-dock/experiments/gemini_cross_no_graph_hints_no_receptors/2026_06_12_02_53/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20110_epoch=39.ckpt"
+
+                "experiments/gemini_cross_no_graph_hints_no_vae_no_rec/2026_06_13_23_02/config.yaml",
+                "/home/alon.kitin/fs-dock/experiments/gemini_cross_no_graph_hints_no_vae_no_rec/2026_06_13_23_02/checkpoints/CfomDockLightningGemini/valid_loss/dataloader_idx_0=0.20127_epoch=39.ckpt"
             ]
         },
         {

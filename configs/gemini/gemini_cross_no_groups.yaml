@@ -1,5 +1,5 @@
 metadata:
-  name: gemini_cross_no_groups
+  name: gemini_cross_no_graph_hints_no_groups
   devices: auto
   debug: false
   batch_size: 20
@@ -125,6 +125,3 @@ test:
     tasks: data/cross/test_tasks.csv
     core_weight: 0.7
     ligand_radius: ${train.val_dataset.ligand_radius}
-    random_translation: 80.0
-    # random_translation: 4.0
-    random_max_angle: 3.14  

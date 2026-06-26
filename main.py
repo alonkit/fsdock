@@ -96,7 +96,8 @@ def train_model(config, smol=False, ckpt=None):
     checkpoint_callback = ModelCheckpoint(
         save_top_k=-1,
         monitor="valid_loss/dataloader_idx_0",
-        mode="max",
+        mode="min",
+        save_on_train_epoch_end=True,
         dirpath=f'{config.metadata.experiment_folder}/checkpoints/{type(lit_model).__name__}/',
         filename= "{valid_loss/dataloader_idx_0:.5f}_{epoch:02d}",
     )
